@@ -3,6 +3,16 @@ const {runtime}=require('./runtime-helper.cjs');
 const wait=(ms=10)=>new Promise(resolve=>setTimeout(resolve,ms));
 const call=(action,args={},extra={},id='tool-1')=>({id,type:'function',function:{name:'app_do',arguments:JSON.stringify({action,args,...extra})}});
 const load=async()=>{const r=runtime();const mod=await r.load('agent-runtime.js');return {r,...mod}};
+test('agent can query the internal course knowledge index without exposing an external action',async()=>{
+ const {r,AppActions,AgentRunner}=await load();try{let step=0;
+ const runner=new AgentRunner({registry:new AppActions(),state:()=>({}),inspect:()=>({}),knowledge:async()=>({lessons:[{index:'已缓存的课程摘要'}],next:null}),stream:async(messages,delta,tools)=>{
+   assert.ok(tools.some(t=>t.function.name==='course_knowledge'));
+   if(!step++)return{calls:[{id:'k',type:'function',function:{name:'course_knowledge',arguments:'{}'}}]};
+   assert.match(messages.at(-1).content,/已缓存的课程摘要/);return{answer:'已按索引回答'};
+ }});
+ assert.equal(await runner.run('总结我的课程'),'已按索引回答');
+ }finally{r.win.close()}
+});
 async function start(t){const r=runtime({extraTestingNames:['getGlobalAssistant','loadData']});const app=(await r.load('app.js')).testing;app.setup();t.after(async()=>{await wait(40);app.getGlobalAssistant?.()?.reset();app.cleanup();r.win.close()});return{r,app,doc:r.win.document,actions:app.getGlobalAssistant().options.registry}}
 
 test('a one-step task finishes in a single model round when the action carries the reply',async()=>{

@@ -29,8 +29,8 @@ test('retired theme identifiers map to the closest colour scheme',async()=>{
 test('appearance mode switches palettes in place and follows the system when asked',async()=>{
  const r=runtime();let dark=false;const listeners=new Set();r.win.matchMedia=()=>({get matches(){return dark},addEventListener:(_,fn)=>listeners.add(fn)});r.win.__zhiyunMode='system';
  const api=await r.load('themes.js'),root=r.win.document.documentElement,editor=r.win.document.createElement('div');editor.contentEditable='true';r.win.document.body.append(editor);
- assert.equal(root.dataset.mode,'light');assert.equal(root.style.getPropertyValue('--theme-bg'),'#f4f5f7');
- dark=true;listeners.forEach(fn=>fn());assert.equal(root.dataset.mode,'dark');assert.equal(root.style.getPropertyValue('--theme-bg'),'#15171b');
+ assert.equal(root.dataset.mode,'light');const lightBg=root.style.getPropertyValue('--theme-bg');assert.match(lightBg,/^#[0-9a-f]{6}$/i);
+ dark=true;listeners.forEach(fn=>fn());assert.equal(root.dataset.mode,'dark');assert.notEqual(root.style.getPropertyValue('--theme-bg'),lightBg);
  assert.equal(api.applyAppearanceMode('light'),'light');assert.equal(root.dataset.mode,'light');assert.equal(root.dataset.appearance,'light');
  assert.equal(api.applyAppearanceMode('dark'),'dark');api.applyAppearanceTheme('film');assert.equal(root.style.getPropertyValue('--theme-paper'),'#24201c');
  assert.equal(api.applyAppearanceMode('neon'),'dark');assert.equal(editor.isConnected,true);

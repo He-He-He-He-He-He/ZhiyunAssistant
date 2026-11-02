@@ -13,7 +13,7 @@ for tool in node xcrun lipo sips iconutil codesign hdiutil ditto shasum; do
 done
 node --experimental-vm-modules generate-models.cjs
 version="$(node -p 'require("./package.json").version')"
-build_number=20
+build_number=22
 build_root="$PWD/build"
 mkdir -p "$build_root"
 staging="$(mktemp -d "$build_root/staging.XXXXXX")"
@@ -42,7 +42,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <plist version="1.0"><dict>
 <key>CFBundleName</key><string>智云助手</string>
 <key>CFBundleDisplayName</key><string>智云助手</string>
-<key>CFBundleIdentifier</key><string>cn.suike.slides.mac</string>
+<key>CFBundleIdentifier</key><string>cn.suike.slides.mac.showcase</string>
 <key>CFBundleExecutable</key><string>Zhiyun</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleShortVersionString</key><string>$version</string>
@@ -51,13 +51,13 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
-<key>NSHumanReadableCopyright</key><string>智云助手独立学习工具</string>
+<key>NSHumanReadableCopyright</key><string>智云助手独立学习工具 · 晴空</string>
 </dict></plist>
 PLIST
-node scripts/campus-services.cjs "$app/Contents/Resources/CampusServices.json"
+cp scripts/zhiyun_mcp.py "$app/Contents/Resources/zhiyun_mcp.py"
 # Ad-hoc signing is for local builds. Developer ID signing/notarization remains a
 # separate release step and never requires embedding certificates or secrets.
-codesign --force --deep --sign - --identifier cn.suike.slides.mac "$app"
+codesign --force --deep --sign - --identifier cn.suike.slides.mac.showcase "$app"
 codesign --verify --deep --strict "$app"
 rm -rf "$build_root/智云助手.app"
 ditto "$app" "$build_root/智云助手.app"
@@ -68,4 +68,4 @@ ln -s /Applications "$dmg_stage/Applications"
 hdiutil create -volname "智云助手" -srcfolder "$dmg_stage" -ov -format UDZO "$build_root/智云助手-Mac-$version.dmg" >/dev/null
 ditto -c -k --norsrc --keepParent "$app" "$build_root/智云助手-Mac-$version.zip"
 (cd "$build_root" && shasum -a 256 "智云助手-Mac-$version.dmg" "智云助手-Mac-$version.zip" > SHA256SUMS.txt)
-printf 'Built universal macOS app %s (%s), DMG and ZIP.\n' "$version" "$build_number"
+printf 'Built universal 晴空 showcase app %s (%s), DMG and ZIP.\n' "$version" "$build_number"

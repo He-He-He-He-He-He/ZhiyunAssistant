@@ -1,0 +1,693 @@
+/* 晴空 · design system for the showcase build.
+   One language across the whole app: a clear sky behind everything, white cloud-like surfaces,
+   azure as the single action colour, sun yellow only for small highlights.
+   Shape: 8 / 12 / 16 / 22 px radii and pill controls. Depth: soft blue shadows instead of grey.
+   Fields are pale azure wells; checkboxes, notes, menus and media controls share the same rules.
+   Geometry contracts from study.css (handles, resize edges, pane clipping) are untouched. */
+
+/* =========================================================================
+   1. Tokens
+   ========================================================================= */
+:root[data-theme=collage] {
+  /* sky */
+  --sky-top: #9cd0ff;
+  --sky-image: url("sky/clouds.svg"), linear-gradient(180deg, #9cd0ff 0%, #bfe2ff 30%, #e2f2ff 64%, #f6fbff 100%);
+  --sky-study: url("sky/clouds.svg"), linear-gradient(180deg, #9cd0ff 0%, #cbe8ff 18%, #e9f5ff 48%, #f7fbff 100%);
+  --azure-1: #2f95ff;
+  --azure-2: #1462f0;
+  --azure-ink: #0f5fe0;
+  --azure-glow: rgba(22, 103, 242, .5);
+  --sun: #ffb31a;
+  --sun-wash: #fff3d6;
+  /* surfaces */
+  --glass: rgba(255, 255, 255, .74);
+  --glass-strong: rgba(255, 255, 255, .9);
+  --glass-solid: #fbfdff;
+  --glass-soft: rgba(255, 255, 255, .5);
+  --glass-line: rgba(255, 255, 255, .9);
+  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), 0 2px 8px rgba(24, 96, 190, .07), 0 24px 48px -24px rgba(24, 96, 190, .38);
+  --card: rgba(255, 255, 255, .88);
+  --card-hover: #ffffff;
+  --card-line: rgba(255, 255, 255, .95);
+  --card-shadow: 0 1px 2px rgba(20, 70, 140, .05), 0 10px 24px -16px rgba(20, 90, 180, .4);
+  --card-shadow-hover: 0 2px 4px rgba(20, 70, 140, .06), 0 18px 32px -16px rgba(20, 90, 180, .5);
+  --well: #f4f9ff;
+  --well-line: #d6e6f8;
+  --well-line-hover: #b5d1f2;
+  --pane: rgba(255, 255, 255, .93);
+  --pane-line: rgba(255, 255, 255, .98);
+  --sticky-fade: #f0f7ff;
+  --nav-text: #12305a;
+  --nav-caption: rgba(18, 48, 90, .52);
+  --nav-hover: rgba(255, 255, 255, .45);
+  --nav-active: rgba(255, 255, 255, .92);
+  --hero: radial-gradient(220px 120px at 58% 118%, rgba(255, 255, 255, .5), rgba(255, 255, 255, 0) 70%),
+          radial-gradient(300px 140px at 30% 128%, rgba(255, 255, 255, .42), rgba(255, 255, 255, 0) 72%),
+          radial-gradient(320px 200px at 98% -18%, rgba(255, 246, 204, .85), rgba(255, 246, 204, 0) 68%),
+          linear-gradient(116deg, #1d78ff 0%, #379aff 40%, #74c3ff 76%, #a6dbff 100%);
+  --hero-shadow: 0 22px 40px -22px rgba(18, 100, 230, .75), inset 0 1px 0 rgba(255, 255, 255, .35);
+  --media: #0b1a33;
+  /* app tokens, retuned to the sky */
+  --fill: rgba(26, 124, 255, .075);
+  --fill-hover: rgba(26, 124, 255, .13);
+  --fill-active: rgba(26, 124, 255, .19);
+  --border: #cfe0f4;
+  --border-soft: #e3edf9;
+  --focus: rgba(47, 149, 255, .26);
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --r-xl: 22px;
+  --r-sheet: 22px;
+  --shadow-sm: 0 1px 2px rgba(20, 70, 140, .06);
+  --shadow-md: 0 2px 6px rgba(20, 70, 140, .06), 0 12px 28px -14px rgba(20, 90, 180, .38);
+  --shadow-lg: 0 2px 8px rgba(16, 80, 180, .1), 0 34px 70px -28px rgba(16, 80, 180, .5);
+  --danger: #ea4b4b;
+  --success: #12a06a;
+  --warning: #dd8600;
+  --live: #ff4d4f;
+  --toast: #0d2f6b;
+}
+:root[data-theme=collage][data-mode=dark] {
+  --sky-top: #0b1b37;
+  --sky-image: radial-gradient(1.4px 1.4px at 12% 18%, rgba(255, 255, 255, .7), transparent),
+               radial-gradient(1.2px 1.2px at 34% 9%, rgba(255, 255, 255, .55), transparent),
+               radial-gradient(1.6px 1.6px at 71% 14%, rgba(255, 255, 255, .6), transparent),
+               radial-gradient(1.1px 1.1px at 88% 31%, rgba(255, 255, 255, .5), transparent),
+               radial-gradient(1.3px 1.3px at 56% 26%, rgba(255, 255, 255, .45), transparent),
+               radial-gradient(600px 300px at 90% -10%, rgba(94, 168, 255, .22), transparent 70%),
+               linear-gradient(180deg, #0b1b37 0%, #0f2649 48%, #15345f 100%);
+  --sky-study: var(--sky-image);
+  --azure-1: #4aa6ff;
+  --azure-2: #2b74f5;
+  --azure-ink: #8cc4ff;
+  --azure-glow: rgba(60, 140, 255, .45);
+  --sun-wash: rgba(255, 196, 74, .16);
+  --glass: rgba(16, 28, 50, .72);
+  --glass-strong: rgba(20, 34, 60, .92);
+  --glass-solid: #15233d;
+  --glass-soft: rgba(255, 255, 255, .08);
+  --glass-line: rgba(150, 190, 255, .16);
+  --glass-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 24px 48px -24px rgba(0, 0, 0, .7);
+  --card: rgba(24, 38, 66, .84);
+  --card-hover: rgba(30, 48, 82, .96);
+  --card-line: rgba(150, 190, 255, .14);
+  --card-shadow: 0 10px 24px -16px rgba(0, 0, 0, .8);
+  --card-shadow-hover: 0 18px 32px -16px rgba(0, 0, 0, .85);
+  --well: #0f1d33;
+  --well-line: #24364f;
+  --well-line-hover: #36507a;
+  --pane: rgba(20, 32, 56, .95);
+  --pane-line: rgba(150, 190, 255, .14);
+  --sticky-fade: #142640;
+  --nav-text: #dbe7f8;
+  --nav-caption: rgba(219, 231, 248, .5);
+  --nav-hover: rgba(255, 255, 255, .07);
+  --nav-active: rgba(94, 168, 255, .2);
+  --hero: radial-gradient(320px 200px at 98% -18%, rgba(140, 196, 255, .35), rgba(140, 196, 255, 0) 68%),
+          linear-gradient(116deg, #123a7a 0%, #1c56aa 48%, #2c76c9 100%);
+  --hero-shadow: 0 22px 40px -22px rgba(0, 0, 0, .8), inset 0 1px 0 rgba(255, 255, 255, .12);
+  --media: #08142a;
+  --fill: rgba(94, 168, 255, .1);
+  --fill-hover: rgba(94, 168, 255, .16);
+  --fill-active: rgba(94, 168, 255, .22);
+  --border: #2a3f60;
+  --border-soft: #1f324f;
+  --focus: rgba(94, 168, 255, .32);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-md: 0 1px 2px rgba(0, 0, 0, .35), 0 12px 28px -12px rgba(0, 0, 0, .6);
+  --shadow-lg: 0 2px 10px rgba(0, 0, 0, .4), 0 34px 70px -28px rgba(0, 0, 0, .8);
+  --toast: #22365a;
+}
+
+/* =========================================================================
+   2. Base
+   ========================================================================= */
+:root[data-theme=collage] body { background: var(--sky-top); }
+:root[data-theme=collage] ::selection { background: color-mix(in srgb, var(--azure-1) 24%, transparent); }
+:where(:root[data-theme=collage]) button { font-weight: 550; }
+/* Thin azure scrollbars; :where() lets components that hide theirs keep doing so. */
+:where(:root[data-theme=collage]) ::-webkit-scrollbar { width: 10px; height: 10px; background: transparent; }
+:where(:root[data-theme=collage]) ::-webkit-scrollbar-thumb { border: 3px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--azure-1) 28%, transparent) padding-box; }
+:where(:root[data-theme=collage]) ::-webkit-scrollbar-thumb:hover { background-color: color-mix(in srgb, var(--azure-1) 45%, transparent); }
+:where(:root[data-theme=collage]) ::-webkit-scrollbar-corner { background: transparent; }
+
+/* =========================================================================
+   3. Controls
+   ========================================================================= */
+/* Buttons: azure-tinted by default (from --fill), gradient pills for primary actions. */
+:root[data-theme=collage] button.primary {
+  background: linear-gradient(135deg, var(--azure-1), var(--azure-2));
+  color: #fff;
+  font-weight: 600;
+  border-radius: 999px;
+  box-shadow: 0 8px 16px -8px var(--azure-glow), inset 0 1px 0 rgba(255, 255, 255, .3);
+}
+:root[data-theme=collage] button.primary:hover { background: linear-gradient(135deg, #47a3ff, #1a6cf6); box-shadow: 0 10px 20px -8px var(--azure-glow), inset 0 1px 0 rgba(255, 255, 255, .35); }
+:root[data-theme=collage] button.primary:active { background: linear-gradient(135deg, #2486f4, #1158d8); }
+:root[data-theme=collage] button.danger { background: color-mix(in srgb, var(--danger) 9%, transparent); color: var(--danger); }
+:root[data-theme=collage] button.danger:hover { background: color-mix(in srgb, var(--danger) 15%, transparent); }
+:root[data-theme=collage] button:focus-visible { box-shadow: 0 0 0 4px var(--focus); }
+
+/* Fields: pale azure wells that turn white with an azure ring while focused.
+   :where() keeps the same specificity as the base rules, so component rules (composers, inline editors) still win. */
+:where(:root[data-theme=collage]) input:not([type=checkbox]):not([type=radio]):not([type=range]),
+:where(:root[data-theme=collage]) select,
+:where(:root[data-theme=collage]) textarea {
+  background-color: var(--well);
+  border: 1px solid var(--well-line);
+  border-radius: 12px;
+  color: var(--text);
+}
+:where(:root[data-theme=collage]) input:not([type=checkbox]):not([type=radio]):not([type=range]):hover,
+:where(:root[data-theme=collage]) select:hover,
+:where(:root[data-theme=collage]) textarea:hover { border-color: var(--well-line-hover); }
+:where(:root[data-theme=collage]) input:not([type=checkbox]):not([type=radio]):not([type=range]):focus,
+:where(:root[data-theme=collage]) select:focus,
+:where(:root[data-theme=collage]) textarea:focus { background-color: var(--surface); border-color: var(--azure-1); box-shadow: 0 0 0 4px var(--focus); }
+:where(:root[data-theme=collage]) input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+:where(:root[data-theme=collage]) select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%231a7cff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+:where(:root[data-theme=collage][data-mode=dark]) select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5' fill='none' stroke='%238cc4ff' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* Checkboxes and radios: rounded azure marks instead of system controls. */
+:where(:root[data-theme=collage]) input[type=checkbox], :where(:root[data-theme=collage]) input[type=radio] {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.5px solid #b5cfee;
+  border-radius: 5px;
+  background: var(--surface) center / 14px no-repeat;
+  vertical-align: -3px;
+  cursor: pointer;
+  transition: background-color .12s ease, border-color .12s ease, box-shadow .12s ease;
+}
+:where(:root[data-theme=collage]) input[type=radio] { border-radius: 50%; }
+:where(:root[data-theme=collage]) :is(input[type=checkbox], input[type=radio]):hover { border-color: var(--azure-1); }
+:where(:root[data-theme=collage]) input[type=checkbox]:checked {
+  border-color: transparent;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.4 6.8 11.1 12 5.6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px no-repeat, linear-gradient(135deg, var(--azure-1), var(--azure-2));
+}
+:where(:root[data-theme=collage]) input[type=radio]:checked { border-color: var(--azure-1); background: radial-gradient(circle, var(--azure-1) 0 4px, var(--surface) 4.6px); }
+:where(:root[data-theme=collage]) :is(input[type=checkbox], input[type=radio]):focus-visible { outline: none; box-shadow: 0 0 0 4px var(--focus); }
+:where(:root[data-theme=collage][data-mode=dark]) :is(input[type=checkbox], input[type=radio]) { border-color: #3d5880; }
+:where(:root[data-theme=collage]) input[type=range] { accent-color: var(--azure-1); }
+:root[data-theme=collage] label:has(> input[type=checkbox]) { gap: 8px; }
+
+/* Segmented controls: an azure-tinted track with a raised white segment. */
+:root[data-theme=collage] :is(.classroom-tabs, .classroom-modes, .appearance-modes) {
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--azure-1) 10%, transparent);
+}
+:root[data-theme=collage] :is(.classroom-tabs, .classroom-modes, .appearance-modes) button { height: 28px; padding: 0 15px; border-radius: 999px; }
+:root[data-theme=collage] :is(.classroom-tabs, .classroom-modes, .appearance-modes) button.active {
+  background: var(--card-hover);
+  color: var(--azure-ink);
+  box-shadow: 0 6px 14px -8px rgba(20, 90, 200, .6), inset 0 0 0 1px rgba(255, 255, 255, .8);
+}
+:root[data-theme=collage][data-mode=dark] :is(.classroom-tabs, .classroom-modes, .appearance-modes) button.active { box-shadow: inset 0 0 0 1px rgba(140, 196, 255, .22), 0 6px 14px -8px rgba(0, 0, 0, .7); }
+
+/* Badges */
+:root[data-theme=collage] .badge { height: 22px; padding: 0 9px; border-radius: 999px; background: color-mix(in srgb, var(--azure-1) 11%, transparent); color: var(--azure-ink); font-weight: 600; }
+:root[data-theme=collage] .badge[data-status=live] { background: color-mix(in srgb, var(--live) 13%, transparent); color: var(--live); }
+
+/* Progress bars */
+:root[data-theme=collage] .offline-progress progress { height: 6px; border-radius: 999px; background: var(--fill); }
+:root[data-theme=collage] .offline-progress progress::-webkit-progress-bar { border-radius: 999px; background: var(--fill); }
+:root[data-theme=collage] .offline-progress progress::-webkit-progress-value { border-radius: 999px; background: linear-gradient(90deg, var(--azure-1), var(--azure-2)); }
+
+/* =========================================================================
+   4. Window shell
+   ========================================================================= */
+:root[data-theme=collage] #app {
+  background-color: var(--sky-top);
+  background-image: var(--sky-image);
+  background-size: cover, 100% 100%;
+  background-position: center bottom, 0 0;
+  background-repeat: no-repeat;
+}
+:root[data-theme=collage] body.study-mode #app { background-image: var(--sky-study); }
+:root[data-theme=collage][data-mode=dark] #app { background-size: auto; }
+:root[data-theme=collage] main { background: transparent; }
+:root[data-theme=collage] body.logged-in:not(.study-mode) main {
+  margin: 6px 12px 12px 2px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.5);
+  backdrop-filter: blur(28px) saturate(1.5);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--r-sheet);
+  box-shadow: var(--glass-shadow);
+}
+:root[data-theme=collage] #navigation { flex-basis: 206px; width: 206px; gap: 2px; padding: 8px 12px 14px 14px; background: transparent; }
+:root[data-theme=collage] #navigation > button { height: 34px; padding: 0 12px; border-radius: 12px; background: transparent; color: var(--nav-text); font-weight: 550; }
+:root[data-theme=collage] #navigation > button .ui-icon { color: var(--azure-1); }
+:root[data-theme=collage] #navigation > button:hover { background: var(--nav-hover); }
+:root[data-theme=collage] #navigation > button.active {
+  background: var(--nav-active);
+  color: var(--azure-ink);
+  font-weight: 650;
+  box-shadow: 0 8px 18px -10px rgba(20, 90, 200, .55), inset 0 0 0 1px rgba(255, 255, 255, .7);
+}
+:root[data-theme=collage][data-mode=dark] #navigation > button.active { box-shadow: inset 0 0 0 1px rgba(140, 196, 255, .22); }
+:root[data-theme=collage] .nav-caption { padding: 16px 12px 5px; color: var(--nav-caption); letter-spacing: .1em; }
+:root[data-theme=collage] #topbar { min-height: 64px; padding: 16px 24px 10px; }
+:root[data-theme=collage] #pageTitle { font-size: 23px; font-weight: 800; letter-spacing: -.025em; }
+:root[data-theme=collage] #pageSubtitle { color: color-mix(in srgb, var(--azure-ink) 55%, var(--text-2)); font-weight: 500; }
+:root[data-theme=collage] body:not(.study-mode) #topActions > button {
+  height: 32px;
+  padding: 0 15px;
+  border-radius: 999px;
+  background: var(--glass-strong);
+  color: var(--nav-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--azure-1) 16%, transparent), 0 4px 10px -8px rgba(20, 90, 200, .5);
+}
+:root[data-theme=collage] body:not(.study-mode) #topActions > button:hover { background: var(--card-hover); color: var(--azure-ink); }
+:root[data-theme=collage] body:not(.study-mode) #topActions > button .ui-icon { color: var(--azure-1); }
+
+/* =========================================================================
+   5. 我的课堂
+   ========================================================================= */
+.intro-hero, .hero-art { display: none; }
+:root[data-theme=collage] .classroom-page { gap: 16px; }
+:root[data-theme=collage] .classroom-intro {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 16px;
+  min-height: 178px;
+  margin-top: 2px;
+  padding: 24px 28px 20px;
+  overflow: hidden;
+  border-radius: 24px;
+  color: #fff;
+  background: var(--hero);
+  box-shadow: var(--hero-shadow);
+}
+:root[data-theme=collage] .intro-hero { position: relative; z-index: 1; display: flex; flex-direction: column; gap: 4px; max-width: min(58%, 520px); }
+:root[data-theme=collage] .hero-eyebrow { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 600; letter-spacing: .04em; color: rgba(255, 255, 255, .92); }
+:root[data-theme=collage] .hero-eyebrow::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #fff7c8, #ffc23d 70%); box-shadow: 0 0 0 3px rgba(255, 214, 102, .35), 0 0 12px rgba(255, 210, 90, .9); }
+:root[data-theme=collage] .hero-title { font: 800 26px/1.25 var(--font-display); letter-spacing: -.03em; text-shadow: 0 2px 14px rgba(8, 56, 150, .28); }
+:root[data-theme=collage] .hero-sub { font-size: 13px; font-weight: 500; color: rgba(255, 255, 255, .9); }
+/* Course slides flowing to the laptop: the page's subject, kept wholly inside the banner. */
+:root[data-theme=collage] .hero-art {
+  display: block;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 26px;
+  z-index: 0;
+  width: auto;
+  height: min(150px, calc(100% - 32px));
+  margin: auto 0;
+  object-fit: contain;
+  pointer-events: none;
+  filter: drop-shadow(0 12px 24px rgba(10, 60, 150, .25));
+  animation: sky-float 7s ease-in-out infinite;
+}
+:root[data-theme=collage] .hero-eyebrow::before { animation: sky-glow 3.6s ease-in-out infinite; }
+@keyframes sky-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+@keyframes sky-glow { 0%, 100% { box-shadow: 0 0 0 3px rgba(255, 214, 102, .35), 0 0 12px rgba(255, 210, 90, .9); } 50% { box-shadow: 0 0 0 5px rgba(255, 214, 102, .18), 0 0 18px rgba(255, 210, 90, 1); } }
+@media (prefers-reduced-motion: reduce) { :root[data-theme=collage] :is(.hero-art, .hero-eyebrow::before) { animation: none; } }
+@media (max-width: 1040px) { :root[data-theme=collage] .hero-art { display: none; } :root[data-theme=collage] .intro-hero { max-width: 100%; } }
+/* The banner already carries today's date, so the page header does not repeat it. */
+:root[data-theme=collage] :is(body[data-page=today], body[data-page=recent]) #pageSubtitle { display: none; }
+:root[data-theme=collage] .classroom-intro .intro-tools { position: relative; z-index: 1; }
+:root[data-theme=collage] .classroom-intro .intro-copy { display: none; }
+:root[data-theme=collage] .classroom-intro :is(.classroom-tabs, .classroom-modes) { background: rgba(255, 255, 255, .2); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .38); }
+:root[data-theme=collage] .classroom-intro :is(.classroom-tabs, .classroom-modes) button { color: rgba(255, 255, 255, .94); }
+:root[data-theme=collage] .classroom-intro :is(.classroom-tabs, .classroom-modes) button:hover { color: #fff; background: rgba(255, 255, 255, .14); }
+:root[data-theme=collage] .classroom-intro :is(.classroom-tabs, .classroom-modes) button.active { background: #fff; color: #0f5fe0; box-shadow: 0 8px 16px -8px rgba(6, 50, 140, .55); }
+:root[data-theme=collage] .classroom-intro .classroom-modes > button:not(.active):has(> .ui-icon) { color: #fff; }
+:root[data-theme=collage] .classroom-intro :where(.toolbar:not(.classroom-tabs, .classroom-modes) > button:not(.primary)) { background: rgba(255, 255, 255, .2); color: #fff; }
+
+/* Lesson rows and course tiles as floating cards. */
+/* Day headings stay clear over the sheet and frost the cards that scroll beneath them. */
+:root[data-theme=collage] .lesson-list > .section-heading {
+  top: -2px;
+  padding: 14px 6px 8px;
+  border-bottom: 0;
+  border-radius: 12px;
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  color: var(--nav-text);
+}
+:root[data-theme=collage] .lesson-list > .section-heading::after { color: color-mix(in srgb, var(--azure-ink) 60%, var(--text-2)); }
+:root[data-theme=collage] .lesson-row {
+  margin: 0 0 8px;
+  padding: 12px 14px 12px 16px;
+  background: var(--card);
+  border: 1px solid var(--card-line);
+  border-radius: 16px;
+  box-shadow: var(--card-shadow);
+  transition: transform .16s ease, box-shadow .16s ease, background-color .16s ease;
+}
+:root[data-theme=collage] .lesson-row:last-child { border-bottom: 1px solid var(--card-line); }
+:root[data-theme=collage] .lesson-row:hover { background: var(--card-hover); border-color: var(--card-line); box-shadow: var(--card-shadow-hover); transform: translateY(-1px); }
+:root[data-theme=collage] .course-time { color: var(--azure-ink); font-weight: 750; font-size: 16px; }
+:root[data-theme=collage] .lesson-row[data-phase=live] { box-shadow: inset 4px 0 0 var(--live), var(--card-shadow); }
+:root[data-theme=collage] .course-card { background: var(--card); border-color: var(--card-line); border-radius: 16px; box-shadow: var(--card-shadow); }
+:root[data-theme=collage] .course-card:hover { background: var(--card-hover); border-color: var(--card-line); box-shadow: var(--card-shadow-hover); }
+:root[data-theme=collage] .course-tile { padding: 16px 18px 14px; border-radius: 20px; background-image: linear-gradient(160deg, color-mix(in srgb, var(--azure-1) 13%, transparent) 0%, transparent 46%); }
+:root[data-theme=collage] .course-tile .course-copy h3 { font-size: 15px; font-weight: 700; }
+:root[data-theme=collage] .course-tile > .actions { border-top-color: color-mix(in srgb, var(--azure-1) 10%, transparent); }
+:root[data-theme=collage] .actions > button.icon { color: color-mix(in srgb, var(--azure-ink) 45%, var(--text-3)); border-radius: 10px; }
+:root[data-theme=collage] .actions > button.icon:hover { background: var(--fill); color: var(--azure-ink); }
+:root[data-theme=collage] .actions > button[aria-pressed=true] { background: var(--fill-hover); color: var(--azure-ink); }
+:root[data-theme=collage] .actions > button[aria-pressed=true]:has(> .ui-icon[data-ui-icon=favourite]) { background: var(--sun-wash); color: #f29b00; }
+:root[data-theme=collage] .actions > button[aria-pressed=true] > .ui-icon { --icon-fill: 1; }
+
+/* =========================================================================
+   6. Library pages: plaza, offline, notes, cache
+   ========================================================================= */
+:root[data-theme=collage] .notes-row { padding: 12px 14px 12px 18px; background: var(--card); border: 1px solid var(--card-line); border-radius: 16px; box-shadow: var(--card-shadow); }
+:root[data-theme=collage] .notes-row + .notes-row { margin-top: 8px; }
+:root[data-theme=collage] .cache-list { border: 1px solid var(--card-line); border-radius: 18px; box-shadow: var(--card-shadow); }
+:root[data-theme=collage] .cache-row { padding: 14px 18px; background: var(--card); border-bottom-color: var(--border-soft); }
+:root[data-theme=collage] .cache-row:hover { background: var(--card-hover); }
+
+/* Illustrated empty states, only where the picture says what will appear here. */
+:root[data-theme=collage] .classroom-browser .empty { min-height: 168px; border: 0; border-radius: 20px; background: color-mix(in srgb, var(--card) 70%, transparent); box-shadow: var(--card-shadow); }
+:root[data-theme=collage] #content .empty { color: var(--text-2); font-size: 13.5px; }
+/* A day without classes sits under the banner, which already has the page's picture: a calendar mark is enough. */
+:root[data-theme=collage] body[data-page=today] .classroom-browser .empty::before {
+  content: "";
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  background: var(--fill) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%231a7cff' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 5h12A2 2 0 0 1 20 7v3H4V7A2 2 0 0 1 6 5Z' fill='%231a7cff' fill-opacity='.18' stroke='none'/%3E%3Cpath d='M6 5h12A2 2 0 0 1 20 7v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z M8 3v4 M16 3v4 M4 10h16'/%3E%3Cpath d='M7.6 13.4h1.8v1.8H7.6Z M11.1 13.4h1.8v1.8h-1.8Z M14.6 13.4h1.8v1.8h-1.8Z M7.6 16.6h1.8v1.8H7.6Z' fill='%231a7cff' stroke='none'/%3E%3C/svg%3E") center / 26px no-repeat;
+}
+:root[data-theme=collage][data-mode=dark] body[data-page=today] .classroom-browser .empty::before {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%238cc4ff' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 5h12A2 2 0 0 1 20 7v3H4V7A2 2 0 0 1 6 5Z' fill='%238cc4ff' fill-opacity='.24' stroke='none'/%3E%3Cpath d='M6 5h12A2 2 0 0 1 20 7v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z M8 3v4 M16 3v4 M4 10h16'/%3E%3Cpath d='M7.6 13.4h1.8v1.8H7.6Z M11.1 13.4h1.8v1.8h-1.8Z M14.6 13.4h1.8v1.8h-1.8Z M7.6 16.6h1.8v1.8H7.6Z' fill='%238cc4ff' stroke='none'/%3E%3C/svg%3E");
+}
+:root[data-theme=collage][data-mode=light] :is(body[data-page=favourite], body[data-page=later], body[data-page=offline], body[data-page=noteManager]) #content .empty::before {
+  content: "";
+  display: block;
+  width: 240px;
+  height: 150px;
+  margin-bottom: 4px;
+  background-position: center;
+  background-size: contain;
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 14px 24px rgba(30, 110, 220, .16));
+}
+:root[data-theme=collage] body[data-page=favourite] #content .empty::before { background-image: url("sky/empty-favourite.webp"); }
+:root[data-theme=collage] body[data-page=later] #content .empty::before { background-image: url("sky/empty-later.webp"); }
+:root[data-theme=collage] body[data-page=offline] #content .empty::before { background-image: url("sky/empty-offline.webp"); }
+:root[data-theme=collage] body[data-page=noteManager] #content .empty::before { background-image: url("sky/empty-notes.webp"); }
+:root[data-theme=collage] :is(body[data-page=favourite], body[data-page=later], body[data-page=offline], body[data-page=noteManager]) #content .empty { min-height: max(300px, calc(100vh - 150px)); }
+
+/* Calendar */
+:root[data-theme=collage] .calendar-head strong { font-weight: 750; letter-spacing: -.01em; }
+:root[data-theme=collage] .calendar-head button { border-radius: 10px; color: var(--azure-ink); }
+:root[data-theme=collage] .calendar-grid button { color: var(--text); font-weight: 550; }
+:root[data-theme=collage] .calendar-grid button:hover { background: var(--fill); }
+:root[data-theme=collage] .calendar-grid button.has-class { background: var(--fill-hover) !important; color: var(--azure-ink) !important; }
+:root[data-theme=collage] .calendar-grid button.is-today { box-shadow: inset 0 0 0 1.5px var(--azure-1); }
+:root[data-theme=collage] .calendar-grid button.active { background: linear-gradient(135deg, var(--azure-1), var(--azure-2)) !important; color: #fff !important; box-shadow: 0 6px 12px -6px var(--azure-glow); }
+
+/* =========================================================================
+   7. Sheets and dialogs
+   ========================================================================= */
+:root[data-theme=collage] #modal { background: color-mix(in srgb, #1d5fb8 16%, transparent); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }
+:root[data-theme=collage][data-mode=dark] #modal { background: rgba(3, 10, 24, .55); }
+:root[data-theme=collage] .modal-shell:not(.full-image) {
+  background: var(--glass-solid);
+  border: 1px solid var(--glass-line);
+  border-radius: 24px;
+  box-shadow: var(--shadow-lg);
+}
+:root[data-theme=collage] #modal header { padding: 16px 16px 12px 22px; border-bottom-color: var(--border-soft); }
+:root[data-theme=collage] #modal h2 { font-size: 17px; font-weight: 750; letter-spacing: -.01em; }
+:root[data-theme=collage] #modalClose { border-radius: 999px; padding: 0 16px; background: var(--fill); color: var(--azure-ink); font-weight: 650; }
+:root[data-theme=collage] #modalClose:hover { background: var(--fill-hover); }
+:root[data-theme=collage] #modalToolbar { padding: 10px 22px; gap: 8px; background: var(--well); border-bottom-color: var(--border-soft); }
+/* A dialog that only offers a few choices sizes to them instead of filling the window. */
+:root[data-theme=collage] .modal-shell:not(.compact, .full-image, .learning-settings):has(> #modalBody > .api-form:only-child) { flex: 0 1 520px; height: auto; max-height: 100%; margin: auto; }
+:root[data-theme=collage] .modal-shell:not(.compact, .full-image, .learning-settings):has(> #modalBody > .api-form:only-child) > #modalBody { flex: 0 1 auto; padding-bottom: 22px; }
+/* Choices stacked in a dialog (export formats, account actions) read as option cards. */
+:root[data-theme=collage] .api-form > button:not(.primary) {
+  justify-content: flex-start;
+  height: 46px;
+  padding: 0 18px;
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--well-line), var(--shadow-sm);
+}
+:root[data-theme=collage] .api-form > button:not(.primary):hover { background: var(--well); color: var(--azure-ink); box-shadow: inset 0 0 0 1.5px var(--azure-1), var(--shadow-sm); }
+:root[data-theme=collage] .api-form > button:not(.primary)::after { content: ""; margin-left: auto; width: 16px; height: 16px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m9.5 6 6 6-6 6' fill='none' stroke='%231a7cff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; }
+/* Learning settings: one grouped list. */
+:root[data-theme=collage] .common-list { border: 1px solid var(--border-soft); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-sm); }
+:root[data-theme=collage] .common-row { min-height: 46px; padding: 10px 18px; background: transparent; }
+:root[data-theme=collage] .common-row:hover { background: var(--well); }
+:root[data-theme=collage] .common-row.dragging { background: var(--fill-hover); }
+:root[data-theme=collage] .drag-grip { color: color-mix(in srgb, var(--azure-1) 45%, var(--text-3)); }
+/* Time jump: three large wells. */
+:root[data-theme=collage] .time-wheels { gap: 18px; }
+:root[data-theme=collage] .time-wheels input:not([type=checkbox]):not([type=radio]):not([type=range]) {
+  width: 92px;
+  height: 66px;
+  border-radius: 18px;
+  background-color: var(--well);
+  color: var(--azure-ink);
+  font-size: 28px;
+  font-weight: 700;
+}
+:root[data-theme=collage] .time-wheels input:not([type=checkbox]):not([type=radio]):not([type=range]):focus { background-color: var(--surface); }
+/* Layout editor */
+:root[data-theme=collage] .parity-layout-board {
+  border-radius: 18px;
+  background: var(--well) radial-gradient(circle, color-mix(in srgb, var(--azure-1) 22%, transparent) 1px, transparent 1.4px) 0 0 / 18px 18px;
+  box-shadow: inset 0 0 0 1px var(--border-soft);
+}
+:root[data-theme=collage] .parity-layout-item { border-color: var(--border); box-shadow: var(--card-shadow); }
+:root[data-theme=collage] .parity-layout-item.selected { border-color: var(--azure-1); box-shadow: inset 0 0 0 1.5px var(--azure-1); }
+/* Overview */
+:root[data-theme=collage] .overview-item { padding: 9px; border-radius: 16px; border-color: var(--border-soft); box-shadow: var(--shadow-sm); }
+:root[data-theme=collage] .overview-item img { border-radius: 10px; background: var(--well); }
+:root[data-theme=collage] .overview-item.selected { border-color: var(--azure-1); background: var(--well); box-shadow: 0 0 0 3px var(--focus); }
+/* Full-window slide: a night-blue stage instead of black. */
+:root[data-theme=collage] #modal:has(.modal-shell.full-image), :root[data-theme=collage] .modal-shell.full-image { background: #0a1730; }
+:root[data-theme=collage] #modal .modal-shell.full-image > header { border-bottom-color: rgba(140, 196, 255, .14); }
+:root[data-theme=collage] .modal-shell.full-image :is(button, #modalClose) { border-radius: 999px; background: rgba(140, 196, 255, .14); color: #eaf3ff; }
+:root[data-theme=collage] .modal-shell.full-image :is(button, #modalClose):hover { background: rgba(140, 196, 255, .24); }
+/* Privacy */
+:root[data-theme=collage] .privacy-card { border-radius: 18px; background: var(--well); border-color: var(--border-soft); }
+
+/* =========================================================================
+   8. Sign in: the app mark on a sky tile, no characters.
+   ========================================================================= */
+:root[data-theme=collage] .welcome {
+  grid-template-columns: 220px minmax(0, 1fr);
+  width: min(800px, calc(100% - 48px));
+  margin: max(48px, calc(50vh - 180px)) auto 48px;
+  padding: 36px 40px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(30px) saturate(1.5);
+  backdrop-filter: blur(30px) saturate(1.5);
+  border: 1px solid var(--glass-line);
+  border-radius: 30px;
+  box-shadow: var(--glass-shadow);
+}
+:root[data-theme=collage] .welcome-art {
+  height: 220px;
+  border-radius: 28px;
+  background: radial-gradient(140px 120px at 82% 14%, rgba(255, 214, 102, .5), rgba(255, 214, 102, 0) 70%), linear-gradient(160deg, #ffffff 0%, #e2f1ff 100%);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .9), 0 18px 36px -22px rgba(20, 90, 200, .5);
+}
+:root[data-theme=collage][data-mode=dark] .welcome-art { background: radial-gradient(140px 120px at 82% 14%, rgba(140, 196, 255, .28), rgba(140, 196, 255, 0) 70%), linear-gradient(160deg, #1d3560 0%, #122544 100%); box-shadow: inset 0 0 0 1px rgba(150, 190, 255, .14); }
+:root[data-theme=collage] .welcome .welcome-art img { width: 116px; height: 116px; filter: drop-shadow(0 14px 22px rgba(20, 90, 200, .32)); }
+:root[data-theme=collage] .welcome-copy .intro-eyebrow { color: var(--azure-ink); letter-spacing: .06em; }
+:root[data-theme=collage] .welcome-copy h2 { font-size: clamp(26px, 2.8vw, 32px); font-weight: 800; background: linear-gradient(120deg, #0f4fd6, #2f95ff 60%, #49b6ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
+:root[data-theme=collage][data-mode=dark] .welcome-copy h2 { background: linear-gradient(120deg, #cfe6ff, #8cc4ff); -webkit-background-clip: text; background-clip: text; }
+:root[data-theme=collage] .welcome .api-form button { height: 42px; font-size: 14px; }
+
+/* =========================================================================
+   9. Study workspace
+   ========================================================================= */
+:root[data-theme=collage] .study-mode #topbar {
+  min-height: 54px;
+  margin: 8px 10px 8px;
+  padding: 7px 10px 7px 8px;
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  backdrop-filter: blur(24px) saturate(1.5);
+  border: 1px solid var(--glass-line);
+  border-radius: 18px;
+  box-shadow: var(--glass-shadow);
+}
+:root[data-theme=collage] .study-mode #pageTitle { font-size: 15px; font-weight: 750; }
+:root[data-theme=collage] .study-mode #topActions > button { border-radius: 11px; color: var(--nav-text); }
+:root[data-theme=collage] .study-mode #topActions > button:hover { background: var(--fill); color: var(--azure-ink); }
+:root[data-theme=collage] #studyTools > [data-kind=view] { background: var(--fill); color: var(--nav-text); }
+:root[data-theme=collage] #studyTools > [data-kind=view]:first-child { border-radius: 999px 0 0 999px; padding-left: 14px; }
+:root[data-theme=collage] #studyTools > [data-kind=view]:not(:has(+ [data-kind=view])) { border-radius: 0 999px 999px 0; padding-right: 14px; }
+:root[data-theme=collage] #studyTools > [data-kind=view].active { color: var(--azure-ink); font-weight: 600; }
+:root[data-theme=collage] #studyTools > [data-kind=view].active::before { border-radius: 999px; background: var(--card-hover); box-shadow: 0 6px 14px -8px rgba(20, 90, 200, .6), inset 0 0 0 1px rgba(255, 255, 255, .85); }
+:root[data-theme=collage][data-mode=dark] #studyTools > [data-kind=view].active::before { box-shadow: inset 0 0 0 1px rgba(140, 196, 255, .22), 0 6px 14px -8px rgba(0, 0, 0, .7); }
+:root[data-theme=collage] #studyTools > [data-kind=view] .ui-icon { color: color-mix(in srgb, var(--azure-1) 75%, var(--nav-text)); }
+:root[data-theme=collage] #studyTools > [data-kind=tool] { border-radius: 11px; color: var(--nav-text); }
+:root[data-theme=collage] #studyTools > [data-kind=tool]:hover { background: var(--fill); color: var(--azure-ink); }
+:root[data-theme=collage] #studyTools > [data-kind=tool].active { background: var(--fill-hover); color: var(--azure-ink); }
+:root[data-theme=collage] #studyTools > [data-kind=view] + [data-kind=tool]::before { background: color-mix(in srgb, var(--azure-1) 25%, transparent); }
+:root[data-theme=collage] #content.study { padding: 0 10px 10px; }
+
+/* Panes */
+:root[data-theme=collage] .pane { background: var(--pane); border-color: var(--pane-line); }
+:root[data-theme=collage] .pane-header { background: transparent; }
+:root[data-theme=collage] .pane-title { font-weight: 700; }
+:root[data-theme=collage] .pane-title > .ui-icon { color: var(--azure-1); }
+:root[data-theme=collage] .pane.selected, :root[data-theme=collage] .parity-pane.selected { border-color: var(--azure-1); box-shadow: inset 0 0 0 1px var(--azure-1), inset 0 0 0 4px color-mix(in srgb, var(--azure-1) 16%, transparent); }
+:root[data-theme=collage] .pane-header button { border-radius: 9px; }
+:root[data-theme=collage] .pane-header button:hover { background: var(--fill); color: var(--azure-ink); }
+:root[data-theme=collage] .pane-header select { border-color: transparent; border-radius: 999px; background-color: var(--fill); }
+:root[data-theme=collage] .pane-header select:hover { background-color: var(--fill-hover); }
+:root[data-theme=collage] .handle:hover::after, :root[data-theme=collage] .pane:hover > .handle::after { background: color-mix(in srgb, var(--azure-1) 40%, transparent); }
+/* No pane open: four pages side by side, the layout these panes will make. */
+:root[data-theme=collage] #noPanes { color: var(--text-2); font-size: 13.5px; }
+:root[data-theme=collage][data-mode=light] #noPanes::before { content: ""; display: block; width: 240px; height: 160px; background: url("sky/study-panes.webp") center / contain no-repeat; filter: drop-shadow(0 14px 24px rgba(30, 110, 220, .16)); }
+
+/* Slides */
+:root[data-theme=collage] .parity-pane[data-pane=slides] > .pane-content { background: var(--well); }
+:root[data-theme=collage] .parity-pane[data-pane=slides] .slide-page-meta { border-radius: 999px; color: var(--azure-ink); font-weight: 600; }
+:root[data-theme=collage] :is(.insert-action, .parity-selection-insert) {
+  border: 0 !important;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--azure-1), var(--azure-2)) !important;
+  color: #fff !important;
+  font-weight: 600;
+  box-shadow: 0 10px 20px -10px var(--azure-glow);
+}
+/* The pointer takes the colour of the pill where it meets it. */
+:root[data-theme=collage] :is(.parity-pane .insert-action, .parity-selection-insert)::before { border: 0; background: color-mix(in srgb, var(--azure-1) 61%, var(--azure-2)); }
+
+/* Transcript */
+:root[data-theme=collage] .caption-line.playing { background: linear-gradient(90deg, color-mix(in srgb, var(--azure-1) 17%, transparent), color-mix(in srgb, var(--azure-1) 4%, transparent)); border-radius: 10px; }
+:root[data-theme=collage] .caption-line.playing .caption-time { color: var(--azure-ink); font-weight: 650; }
+:root[data-theme=collage] :is(.return-floating, .parity-return) {
+  border: 0;
+  background: linear-gradient(135deg, var(--azure-1), var(--azure-2));
+  color: #fff;
+  font-weight: 600;
+  box-shadow: 0 10px 20px -10px var(--azure-glow), inset 0 1px 0 rgba(255, 255, 255, .3);
+}
+:root[data-theme=collage] :is(.return-floating, .parity-return):hover { background: linear-gradient(135deg, #47a3ff, #1a6cf6); color: #fff; }
+
+/* Video: a night-blue player and control bar. */
+:root[data-theme=collage] :is(.video-wrap, .video-wrap video, .video-controls) { background: var(--media); }
+:root[data-theme=collage] .video-controls button { border-radius: 999px; color: #eaf3ff; }
+:root[data-theme=collage] .video-controls button:hover { background: rgba(140, 196, 255, .16); color: #fff; }
+:root[data-theme=collage] .video-controls input[type=range] { accent-color: #6fb6ff; }
+:root[data-theme=collage] .video-controls .time { color: #b9cbe6; }
+:root[data-theme=collage] .speed-pop { background: rgba(16, 36, 72, .97); border-color: rgba(140, 196, 255, .2); border-radius: 16px; box-shadow: 0 18px 40px -12px rgba(0, 0, 0, .55); }
+:root[data-theme=collage] .seek-preview { border-radius: 16px; background: rgba(11, 26, 51, .86); }
+:root[data-theme=collage] .pane.video-fullscreen { background: #050d1d; }
+:root[data-theme=collage] .video-fullscreen .video-controls { background: linear-gradient(rgba(5, 13, 29, 0), rgba(5, 13, 29, .82)); }
+
+/* Notes: the toolbar is a soft tray that wraps instead of hiding tools; every block is a light card with a source mark. */
+:root[data-theme=collage] .formatbar { flex-wrap: wrap; gap: 2px; row-gap: 4px; overflow: visible; margin: 0 10px 6px; padding: 4px 8px; border-radius: 14px; background: var(--well); box-shadow: inset 0 0 0 1px var(--border-soft); }
+:root[data-theme=collage] .formatbar button { height: 28px; border-radius: 9px; color: var(--text-2); }
+:root[data-theme=collage] .formatbar button:hover { background: var(--fill-hover); color: var(--azure-ink); }
+:root[data-theme=collage] .formatbar > button:nth-child(-n+4) { width: 28px; color: var(--nav-text); }
+:root[data-theme=collage] .formatbar select { height: 28px; border: 0; border-radius: 999px; background-color: var(--surface); box-shadow: inset 0 0 0 1px var(--well-line); font-weight: 600; color: var(--nav-text); }
+:root[data-theme=collage] .parity-notes.notes-editor figure.note-block {
+  position: relative;
+  padding: 9px 12px 11px 18px;
+  background: color-mix(in srgb, var(--note-color, #eaf4ff) 55%, #ffffff);
+  border: 1px solid color-mix(in srgb, var(--note-color, #eaf4ff), #0b3a80 8%);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(20, 70, 140, .05), 0 8px 18px -14px rgba(20, 90, 180, .35);
+}
+:root[data-theme=collage] .parity-notes.notes-editor figure.note-block::before {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--note-color, #eaf4ff), #1a5fd0 42%);
+  pointer-events: none;
+}
+/* At night the card keeps only a trace of its colour, so the light text stays readable. */
+:root[data-theme=collage][data-mode=dark] .parity-notes.notes-editor figure.note-block {
+  background: color-mix(in srgb, var(--note-color, #eaf4ff) 12%, #16233b);
+  border-color: color-mix(in srgb, var(--note-color, #eaf4ff) 22%, transparent);
+  box-shadow: 0 8px 18px -14px rgba(0, 0, 0, .7);
+}
+/* Select-all still tints every card (these selectors must outrank the card rules above). */
+:root[data-theme=collage] .parity-notes.note-whole-selected.notes-editor figure.note-block { background: color-mix(in srgb, var(--note-color, #eaf4ff) 60%, #a8d7ff 40%); }
+:root[data-theme=collage][data-mode=dark] .parity-notes.note-whole-selected.notes-editor figure.note-block { background: color-mix(in srgb, var(--azure-1) 24%, #16233b); }
+/* Header: the source as a small chip, the moment as an azure time pill, a round remove button. */
+:root[data-theme=collage] .parity-notes .note-block-header { gap: 7px; min-height: 24px; padding-bottom: 6px; }
+:root[data-theme=collage] .parity-notes .note-source-name { height: 20px; padding: 0 8px; border-radius: 999px; background: rgba(255, 255, 255, .72); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--note-color, #eaf4ff), #0b3a80 10%); color: #3b4f6e; font-weight: 650; line-height: 20px; }
+:root[data-theme=collage] .parity-notes .note-block-time { height: 20px; padding: 0 7px; border-radius: 999px; background: rgba(26, 124, 255, .1); color: var(--azure-ink); font-weight: 600; line-height: 20px; }
+:root[data-theme=collage] .parity-notes .note-remove { border-radius: 50%; }
+:root[data-theme=collage] .parity-notes .note-remove:hover { background: color-mix(in srgb, var(--danger) 12%, transparent) !important; color: var(--danger) !important; }
+@supports (color: oklch(from red l c h)) {
+  :root[data-theme=collage] .parity-notes.notes-editor figure.note-block::before { background: oklch(from var(--note-color, #eaf4ff) .66 calc(c * 5 + .06) h); }
+  :root[data-theme=collage] .parity-notes .note-source-name { color: oklch(from var(--note-color, #eaf4ff) .42 calc(c * 4 + .05) h); }
+}
+:root[data-theme=collage][data-mode=dark] .parity-notes .note-source-name { background: rgba(255, 255, 255, .08); box-shadow: none; color: var(--text-2); }
+:root[data-theme=collage] .parity-notes .note-copy-menu button { border-color: var(--well-line); border-radius: 999px; color: var(--azure-ink); box-shadow: var(--shadow-md); }
+:root[data-theme=collage] .note-color-swatch { width: 28px; height: 28px !important; border: 0; }
+:root[data-theme=collage] .note-color-swatch[aria-pressed=true] { box-shadow: inset 0 0 0 1px rgba(11, 58, 128, .12), 0 0 0 2px var(--surface), 0 0 0 4px var(--azure-1); }
+
+/* Course Q&A and page summary */
+:root[data-theme=collage] .question {
+  border-radius: 18px 18px 6px 18px;
+  background: linear-gradient(135deg, var(--azure-1), var(--azure-2));
+  color: #fff;
+  box-shadow: 0 10px 20px -12px var(--azure-glow);
+}
+:root[data-theme=collage] :is(.question-options, .summary-options) { border-bottom-color: var(--border); }
+/* Answers fade out under the header instead of being cut through a line of text. */
+:root[data-theme=collage] :is(#questionBody, #summaryBody) { padding-top: 8px; -webkit-mask-image: linear-gradient(transparent, #000 8px); mask-image: linear-gradient(transparent, #000 8px); }
+:root[data-theme=collage] .time-link { padding: 0 5px; border-radius: 6px; background: var(--fill); color: var(--azure-ink); font-weight: 600; }
+:root[data-theme=collage] .time-link:hover { background: var(--fill-hover); text-decoration: none; }
+:root[data-theme=collage] .ai-bottom { border-color: var(--well-line); border-radius: 18px; background: var(--surface); box-shadow: 0 10px 22px -16px rgba(20, 90, 180, .55); }
+:root[data-theme=collage] .ai-bottom:focus-within { border-color: var(--azure-1); box-shadow: 0 0 0 4px var(--focus), 0 10px 22px -16px rgba(20, 90, 180, .55); }
+
+/* =========================================================================
+   10. Application assistant
+   ========================================================================= */
+:root[data-theme=collage] .global-agent {
+  background: var(--glass-solid);
+  border: 1px solid var(--glass-line);
+  border-radius: 22px;
+  box-shadow: 0 2px 8px rgba(16, 80, 180, .1), 0 34px 70px -28px rgba(16, 80, 180, .55);
+}
+:root[data-theme=collage][data-mode=dark] .global-agent { box-shadow: 0 34px 70px -28px rgba(0, 0, 0, .85); }
+:root[data-theme=collage] .global-agent > .agent-head { background: linear-gradient(180deg, color-mix(in srgb, var(--azure-1) 11%, transparent), transparent); border-bottom-color: var(--border-soft); }
+:root[data-theme=collage] .agent-identity .pane-title { font-weight: 750; }
+:root[data-theme=collage] .agent-turn.user .agent-message { background: linear-gradient(135deg, var(--azure-1), var(--azure-2)); color: #fff; border-radius: 18px 18px 6px 18px; box-shadow: 0 10px 20px -12px var(--azure-glow); }
+:root[data-theme=collage] .agent-progress { border-radius: 14px; border-color: var(--border-soft); background: var(--well); }
+:root[data-theme=collage] .agent-progress[data-state=done] .agent-progress-mark { color: var(--success); }
+:root[data-theme=collage] .agent-composer { border-radius: 18px; border-color: var(--well-line); box-shadow: 0 10px 22px -16px rgba(20, 90, 180, .55); }
+:root[data-theme=collage] .agent-composer:focus-within { border-color: var(--azure-1); box-shadow: 0 0 0 4px var(--focus), 0 10px 22px -16px rgba(20, 90, 180, .55); }
+:root[data-theme=collage] .global-agent .agent-send { border-radius: 50%; background: linear-gradient(135deg, var(--azure-1), var(--azure-2)); color: #fff; box-shadow: 0 6px 12px -6px var(--azure-glow); }
+/* Empty assistant: the notes it drafts, so the picture says what the assistant does. Like every empty-state
+   picture it appears in the light sky only; at night the assistant keeps its icon mark. */
+:root[data-theme=collage][data-mode=light] .agent-welcome-mark { width: 220px; height: 122px; margin-bottom: 10px; border-radius: 0; background: url("sky/agent.webp") center / contain no-repeat; box-shadow: none; }
+:root[data-theme=collage][data-mode=light] .agent-welcome-mark .ui-icon { display: none; }
+:root[data-theme=collage] .agent-empty { font-size: 18px; font-weight: 750; }
+:root[data-theme=collage] .agent-bubble { border-radius: 999px; background: var(--glass-solid); border-color: var(--glass-line); box-shadow: var(--shadow-md); }
+
+/* =========================================================================
+   11. Feedback
+   ========================================================================= */
+:root[data-theme=collage] #toast { border-radius: 999px; background: var(--toast); box-shadow: 0 16px 34px -14px rgba(13, 47, 107, .55); }

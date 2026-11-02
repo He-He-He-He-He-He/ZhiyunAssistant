@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" preserveAspectRatio="xMidYMax slice">
+  <defs>
+    <!-- One vertical gradient per cloud, in user space, so overlapping puffs never show seams. -->
+    <linearGradient id="bank" gradientUnits="userSpaceOnUse" x1="0" y1="688" x2="0" y2="920">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".62" stop-color="#ffffff"/><stop offset="1" stop-color="#dcecff"/>
+    </linearGradient>
+    <linearGradient id="crest" gradientUnits="userSpaceOnUse" x1="0" y1="66" x2="0" y2="192">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".62" stop-color="#ffffff"/><stop offset="1" stop-color="#dcecff"/>
+    </linearGradient>
+    <linearGradient id="puffA" gradientUnits="userSpaceOnUse" x1="0" y1="402" x2="0" y2="470">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".62" stop-color="#ffffff"/><stop offset="1" stop-color="#dcecff"/>
+    </linearGradient>
+    <linearGradient id="puffB" gradientUnits="userSpaceOnUse" x1="0" y1="59" x2="0" y2="110">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".62" stop-color="#ffffff"/><stop offset="1" stop-color="#dcecff"/>
+    </linearGradient>
+    <linearGradient id="puffC" gradientUnits="userSpaceOnUse" x1="0" y1="576" x2="0" y2="662">
+      <stop offset="0" stop-color="#ffffff"/><stop offset=".62" stop-color="#ffffff"/><stop offset="1" stop-color="#dcecff"/>
+    </linearGradient>
+    <radialGradient id="sun" cx="1310" cy="-30" r="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#fffbe6" stop-opacity=".95"/>
+      <stop offset=".35" stop-color="#fff3c2" stop-opacity=".38"/>
+      <stop offset="1" stop-color="#fff3c2" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="soft" x="-10%" y="-30%" width="120%" height="160%"><feGaussianBlur stdDeviation="1.6"/></filter>
+    <filter id="haze" x="-30%" y="-60%" width="160%" height="220%"><feGaussianBlur stdDeviation="18"/></filter>
+  </defs>
+  <rect width="1440" height="900" fill="url(#sun)"/>
+  <!-- distant haze -->
+  <g fill="#ffffff" opacity=".55" filter="url(#haze)">
+    <ellipse cx="340" cy="250" rx="260" ry="40"/>
+    <ellipse cx="1010" cy="520" rx="320" ry="46"/>
+    <ellipse cx="620" cy="840" rx="520" ry="70"/>
+  </g>
+  <!-- cloud bank, bottom left -->
+  <g filter="url(#soft)">
+    <ellipse cx="250" cy="912" rx="300" ry="34" fill="#cfe4ff" opacity=".7"/>
+    <g fill="url(#bank)">
+      <circle cx="40" cy="842" r="92"/><circle cx="150" cy="792" r="104"/><circle cx="268" cy="818" r="86"/>
+      <circle cx="372" cy="852" r="70"/><circle cx="458" cy="878" r="54"/><rect x="-60" y="840" width="560" height="80" rx="40"/>
+    </g>
+  </g>
+  <!-- cloud, top right -->
+  <g filter="url(#soft)" opacity=".96">
+    <ellipse cx="1262" cy="196" rx="160" ry="18" fill="#cfe4ff" opacity=".55"/>
+    <g fill="url(#crest)">
+      <circle cx="1150" cy="160" r="44"/><circle cx="1214" cy="128" r="62"/><circle cx="1290" cy="140" r="54"/>
+      <circle cx="1352" cy="166" r="38"/><rect x="1110" y="152" width="280" height="40" rx="20"/>
+    </g>
+  </g>
+  <!-- small clouds -->
+  <g filter="url(#soft)" opacity=".9">
+    <g fill="url(#puffA)"><circle cx="96" cy="452" r="26"/><circle cx="132" cy="436" r="34"/><circle cx="170" cy="452" r="24"/><rect x="72" y="448" width="120" height="22" rx="11"/></g>
+    <g fill="url(#puffB)"><circle cx="760" cy="96" r="18"/><circle cx="786" cy="84" r="25"/><circle cx="814" cy="98" r="16"/><rect x="744" y="94" width="88" height="16" rx="8"/></g>
+    <g fill="url(#puffC)"><circle cx="1268" cy="640" r="30"/><circle cx="1310" cy="618" r="42"/><circle cx="1356" cy="640" r="28"/><rect x="1236" y="636" width="150" height="26" rx="13"/></g>
+  </g>
+</svg>

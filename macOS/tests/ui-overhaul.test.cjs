@@ -24,12 +24,6 @@ test('summary and question options sit in their pane header instead of an extra 
  assert.equal(doc.querySelector('[data-pane=summary] > .summary-options, [data-pane=question] > .question-options'),null);
  assert.equal(doc.querySelector('.ai-service-note'),null);
 });
-test('campus AI first use shows a persistent notice with network, expiry and personal API advice',async t=>{
- const{r,app,doc}=await start(t,['notifyCampusAI']);app.put({prefs:{aiProvider:'campus',campusLimitsSeen:true}});
- app.notifyCampusAI();let notice=doc.querySelector('.campus-welcome');assert.ok(notice);assert.match(notice.textContent,/校园网.*效果可能不佳.*(?:自己的|个人).*DeepSeek.*2026 年 11 月 1 日/s);
- assert.notEqual(app.state().prefs.campusOnboarding20261101,true);app.notifyCampusAI();assert.equal(doc.querySelectorAll('.campus-welcome').length,1);
- notice.querySelector('button').click();await wait();assert.equal(JSON.parse(r.data.get('prefs.json')).campusOnboarding20261101,true);assert.equal(doc.querySelector('.campus-welcome'),null);app.notifyCampusAI();assert.equal(doc.querySelector('.campus-welcome'),null);
-});
 test('assistant history drops empty chats, deletes one chat and clears all with confirmation',async t=>{
  const{r,app,doc}=await start(t,['getGlobalAssistant','loadData']);const assistant=app.getGlobalAssistant();await assistant.show();
  await assistant.newConversation();assert.equal(JSON.parse(r.data.get('chats-agent.json')).conversations.length,0);
@@ -58,10 +52,18 @@ test('background operations read notes and clear caches without navigating',asyn
  let asked=0;r.win.__confirm=()=>{asked++;return true};await actions.execute('cache_clear',{category:'question',confirm:true});assert.ok(r.calls.some(([a,p])=>a==='cache'&&p.clear&&p.category==='question'));assert.equal(app.state().page,'recent');assert.equal(asked,0);
  const before=r.calls.filter(([a,p])=>a==='cache'&&p.clear).length;await assert.rejects(actions.execute('cache_clear',{category:'all'}),/不可撤销/);assert.equal(r.calls.filter(([a,p])=>a==='cache'&&p.clear).length,before,'nothing is cleared without the user\'s explicit request');
 });
-test('privacy opens as a compact sheet with the four data topics',async t=>{
- const{app,doc}=await start(t,['privacy']);app.privacy();
+test('privacy opens as a compact sheet with the external agent setup',async t=>{
+ const{r,app,doc}=await start(t,['privacy']);app.privacy();
  assert.equal(doc.querySelector('#modalTitle').textContent,'隐私与数据');assert.ok(doc.querySelector('.modal-shell').classList.contains('compact'));
- assert.equal(doc.querySelectorAll('.privacy-card').length,4);assert.match(doc.querySelector('.privacy-page').textContent,/不保存密码.*加密快照.*API 费用.*断网不会自动退出登录/s);
+ assert.equal(doc.querySelectorAll('.privacy-grid > .privacy-card').length,4);assert.ok(doc.querySelector('.privacy-page > .privacy-agent-card'));assert.match(doc.querySelector('.privacy-page').textContent,/不保存密码.*加密快照.*API 费用.*断网不会自动退出登录.*连接 AI 工具/s);
+ const box=doc.querySelector('.privacy-agent-card');assert.ok(!/Codex|DeepSeek Harness/.test(box.textContent));assert.match(box.textContent,/AI 帮你装/);
+ [...box.querySelectorAll('button')].find(b=>b.textContent==='AI 帮你装').click();await wait();const copy=r.calls.find(([name])=>name==='copy');assert.match(copy[1].text,/MCP.*\/usr\/bin\/python3/);assert.match(copy[1].text,/不支持 MCP/);
+ const toggle=[...box.querySelectorAll('button')].find(b=>b.textContent==='开启接口');toggle.click();await wait();assert.equal(toggle.textContent,'关闭接口');assert.equal(box.querySelector('#external-agent-status').textContent,'接口已开启');assert.ok(r.calls.some(([name,args])=>name==='externalAgentEnable'&&args.enabled));toggle.click();await wait();assert.equal(toggle.textContent,'开启接口');
+});
+test('lesson date headings cannot stick over cards and keep a visible gap',()=>{
+ const fs=require('node:fs'),path=require('node:path'),css=fs.readFileSync(path.join(__dirname,'../web/app.css'),'utf8'),sky=fs.readFileSync(path.join(__dirname,'../web/sky.css'),'utf8');
+ const heading=css.match(/\.lesson-list > \.section-heading\s*\{([^}]+)\}/)[1];assert.match(heading,/position:\s*static/);assert.match(heading,/margin:\s*0 0 8px/);
+ assert.match(sky,/\.lesson-list > \.section-heading\s*\{[^}]*backdrop-filter:\s*none/s);
 });
 test('a course page lists its lessons from the first to the last, upcoming ones at the end',async t=>{
  const{r,app,doc}=await start(t,['openGroup']);const rows=[lessonAt(r,7,'next'),lessonAt(r,-14,'first'),lessonAt(r,-7,'second')].map(c=>({...c,courseId:'same'}));

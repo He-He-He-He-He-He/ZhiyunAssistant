@@ -6,9 +6,9 @@ function copy(dir,relative=''){
   for(const entry of fs.readdirSync(dir,{withFileTypes:true})){
     const name=path.join(relative,entry.name),source=path.join(dir,entry.name),target=path.join(to,name);
     if(entry.isSymbolicLink())throw new Error('Symlinks are not allowed in shipped resources: '+name);
-    if(entry.isDirectory()){if(relative===''&&['models','theme-previews'].includes(entry.name))copy(source,name);else throw new Error('Unexpected resource directory: '+name);continue}
+    if(entry.isDirectory()){if(relative===''&&['models','theme-previews','sky'].includes(entry.name))copy(source,name);else throw new Error('Unexpected resource directory: '+name);continue}
     if(!entry.isFile())throw new Error('Unexpected resource type: '+name);
-    if(!/\.(js|css|html)$/.test(name)&&!['icon.png','theme-editorial.png'].includes(name)&&!/^theme-(collage|playful|press|acid|bauhaus|candy|terminal|swiss|field|film|workshop|post|memphis|retro|glass|marginalia|metro|sketch|racing|gallery)\.png$/.test(name)&&!/^theme-previews\/(collage|playful|press|acid|bauhaus|candy|terminal|swiss|field|film|workshop|post|memphis|retro|glass|marginalia|metro|sketch|racing|gallery)\.png$/.test(name))throw new Error('Unexpected public resource: '+name);
+    if(!/\.(js|css|html)$/.test(name)&&!['icon.png','theme-editorial.png'].includes(name)&&!/^theme-(collage|playful|press|acid|bauhaus|candy|terminal|swiss|field|film|workshop|post|memphis|retro|glass|marginalia|metro|sketch|racing|gallery)\.png$/.test(name)&&!/^sky\/[a-z0-9-]+\.(webp|svg)$/.test(name)&&!/^theme-previews\/(collage|playful|press|acid|bauhaus|candy|terminal|swiss|field|film|workshop|post|memphis|retro|glass|marginalia|metro|sketch|racing|gallery)\.png$/.test(name))throw new Error('Unexpected public resource: '+name);
     if(/\.(js|css|html)$/.test(name)){
       const text=fs.readFileSync(source,'utf8');
       if(/\/Users\/[A-Za-z0-9_.-]+\/|["']sk-[A-Za-z0-9]{20,}["']|["'](?:password|apiKey|cookie)["']\s*:\s*["'][^"']{12,}["']/i.test(text))throw new Error('Potential private value in '+name+'; review before packaging.');

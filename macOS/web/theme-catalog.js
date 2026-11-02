@@ -1,9 +1,9 @@
 // Stable identifiers also used by the native appearance preference.
 // Three colour schemes, each tuned for light and dark appearance.
 export const THEMES = [
- {id:'collage',name:'晴空',tag:'清爽 · 专注 · 默认',layout:'sky',nav:'side',radius:10,font:'sans',
-  brand:'#2f6fd6',bg:'#f4f5f7',paper:'#ffffff',ink:'#1c2330',dim:'#667185',line:'#e1e4ea',tint:'#e8f0fd',second:'#efb23b',
-  dark:{brand:'#5e9cf6',bg:'#15171b',paper:'#1e2127',ink:'#e7e9ee',dim:'#9aa2af',line:'#2d3139',tint:'#1c2a42',second:'#efb23b'},
+ {id:'collage',name:'晴空',tag:'蓝天白云 · 明亮 · 默认',layout:'sky',nav:'side',radius:14,font:'sans',
+  brand:'#1f7bff',bg:'#eef6ff',paper:'#ffffff',ink:'#0f2340',dim:'#566a85',line:'#d6e5f5',tint:'#e2f0ff',second:'#ffb31a',
+  dark:{brand:'#5ea8ff',bg:'#0b1b37',paper:'#16233b',ink:'#e8eef8',dim:'#9fb0c8',line:'#253756',tint:'#163057',second:'#ffc24a'},
   subtitle:'课堂里的片段，慢慢拼成理解。'},
  {id:'playful',name:'紫藤',tag:'柔和 · 安静',layout:'wisteria',nav:'side',radius:14,font:'sans',
   brand:'#7055d4',bg:'#f6f5f9',paper:'#ffffff',ink:'#241f33',dim:'#6e6784',line:'#e6e2ee',tint:'#efeafb',second:'#ef9f99',

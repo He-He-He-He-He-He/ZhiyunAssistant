@@ -14,3 +14,7 @@
 button:has(> .ui-icon) { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 button.primary > .ui-icon, button.active > .ui-icon { color: inherit; }
 [data-theme=retro] .ui-icon svg { shape-rendering: crispEdges; }
+
+/* 晴空 duotone layers: the soft fill follows the icon colour. */
+.ui-icon .i-fill { fill-opacity: var(--icon-fill, .18); }
+:root[data-mode=dark] .ui-icon .i-fill { fill-opacity: var(--icon-fill, .24); }

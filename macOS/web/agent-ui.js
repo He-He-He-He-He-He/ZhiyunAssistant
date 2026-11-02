@@ -32,7 +32,7 @@ const WORDS = {
   play: '播放', pause: '暂停', fullscreen: '全屏', exit_fullscreen: '退出全屏', read: '读取', adjust: '调整', save: '保存', lock: '锁定', unlock: '解锁', auto: '自动排列', rows: '按行', columns: '按列',
   video: '视频', history: '历史课表', summary: '速览', question: '问答', downloads: '下载', click: '点击', fill: '填写', select: '选择', focus: '聚焦', scroll: '滚动',
   resume: '继续', retry: '重试', first: '提前', last: '延后', preserve: '保存可用内容', delete: '删除', scope: '范围', all: '全部页面', generate: '生成',
-  favourite: '收藏', later: '稍后再看', insert: '插入', append: '追加', replace: '替换', campus: '校内网关', personal: '个人 API',
+  favourite: '收藏', later: '稍后再看', insert: '插入', append: '追加', replace: '替换', personal: '个人 API',
 };
 
 export class GlobalAssistant {
@@ -359,7 +359,7 @@ export class GlobalAssistant {
       await this.ensureOwner(); const generation = this.generation, owner = this.options.owner();
       const ready = await this.options.ready();
       if (generation !== this.generation || owner !== this.options.owner()) return;
-      if (!ready) { this.notice('当前 AI 服务尚未就绪，请在设置中选择校内网关或个人 API。'); await this.settings(); return; }
+      if (!ready) { this.notice('当前 AI 服务尚未就绪，请在设置中配置个人 API 或本地模型。'); await this.settings(); return; }
       return await this.performSubmission();
     } finally { this.submitting = false; }
   }
@@ -442,28 +442,31 @@ export class GlobalAssistant {
     };
     const section = title => { const n = create('section', 'agent-settings-group'); n.append(create('h4', '', title)); return n; };
     const connection = section('连接与模型'), source = create('select'); source.setAttribute('aria-label', 'AI服务来源');
-    for (const [value, text] of [['auto', '自动 · 优先个人 API'], ['campus', '浙大校内网关'], ['personal', '个人 DeepSeek API'], ['local', '本地 Gemma']]) { const option = create('option', '', text); option.value = value; source.append(option); }
+    for (const [value, text] of [['auto', '自动 · 个人 API'], ['personal', '个人 DeepSeek API'], ['local', '本地模型']]) { const option = create('option', '', text); option.value = value; source.append(option); }
     source.value = this.options.provider();
     const sourceHint = create('p', 'agent-provider-hint');
-    const describe = () => { const description = this.options.providerDescription(); sourceHint.textContent = description + (description.includes('校内') ? '。课件先经 OCR 转为文字，图示关系可能遗漏。' : ''); }; describe();
-    source.onchange = () => this.options.setProvider(source.value).then(() => { describe(); modelField.hidden = ['campus','local'].includes(source.value) || (source.value === 'auto' && !personalReady); effortField.hidden = modelField.hidden; }).catch(error => this.notice(error.message, 'error'));
+    const describe = () => { const description = this.options.providerDescription(); sourceHint.textContent = description; }; describe();
+    source.onchange = () => this.options.setProvider(source.value).then(() => { describe(); updateLocalModels(); modelField.hidden = source.value === 'local'; effortField.hidden = modelField.hidden; }).catch(error => this.notice(error.message, 'error'));
+    const localModel = create('select'); localModel.setAttribute('aria-label', '本地模型');
+    const localField = field('本地模型', localModel, '课程问答、本页速览与应用助手共用；发消息时才加载所选模型。');
+    const updateLocalModels = () => {
+      localField.hidden = source.value !== 'local';
+      localModel.replaceChildren(...(this.options.localModels?.() || []).map(([value, text]) => { const option = create('option', '', text); option.value = value; return option; }));
+      localModel.value = this.options.localModel?.() || '';
+    }; updateLocalModels();
+    localModel.onchange = () => this.options.setLocalModel(localModel.value).then(describe).catch(error => this.notice(error.message, 'error'));
     const model = create('select'); model.setAttribute('aria-label', '助手模型');
     for (const [value, text] of [['deepseek-flash', 'DeepSeek Flash'], ['deepseek-v4-pro', 'DeepSeek Pro']]) { const option = create('option', '', text); option.value = value; model.append(option); }
     model.value = this.options.model(); model.onchange = () => this.options.setModel(model.value);
-    const modelField = field('个人 API 模型', model, '个人 API 的应用助手支持思考模式；校内网关使用学校指定模型。'); modelField.hidden = ['campus','local'].includes(source.value) || (source.value === 'auto' && !personalReady);
+    const modelField = field('个人 API 模型', model, '个人 API 的应用助手支持思考模式。'); modelField.hidden = source.value === 'local';
     const effort = create('select'); effort.setAttribute('aria-label', '助手思考强度'); for (const [value, label] of [['low', '快捷'], ['high', '均衡'], ['max', '深入']]) { const option = create('option', '', label); option.value = value; effort.append(option); } effort.value = this.options.effort?.() || 'high'; effort.onchange = () => this.options.setEffort?.(effort.value); const effortField = field('思考强度', effort, '均衡适合日常操作；深入适合复杂任务，耗时和用量可能增加。'); effortField.hidden = modelField.hidden; source.addEventListener('change', () => { effortField.hidden = modelField.hidden; });
-    connection.append(field('服务来源', source), sourceHint, modelField, effortField); this.log.append(connection);
+    connection.append(field('服务来源', source), sourceHint, localField, modelField, effortField); this.log.append(connection);
     const credentials = section('个人 DeepSeek API'), badge = create('span', 'agent-config-badge', personalReady ? '已配置' : '未配置'); badge.dataset.ready = String(personalReady); credentials.querySelector('h4').append(badge);
     const password = create('input'); password.type = 'password'; password.placeholder = personalReady ? '输入新密钥以更换' : 'sk-…'; password.autocomplete = 'off'; password.setAttribute('aria-label', 'DeepSeek API 密钥');
     credentials.append(field('API 密钥', password, '密钥仅保存在本机，输入后即可使用。'), this.action(personalReady ? '更换个人密钥' : '保存个人密钥', async () => { const key = password.value.trim(); if (!/^sk-[A-Za-z0-9_-]{16,200}$/.test(key)) throw new Error('请输入有效的 API 密钥'); await this.options.setKey(key); password.value = ''; this.renderHistory(); this.notice('已改用个人 API'); }, 'primary'));
     this.log.append(credentials);
-    const advanced = create('details', 'agent-gateway-config'), heading = create('summary', '', '本机校园服务');
-    const campus = create('input'); campus.type = 'password'; campus.autocomplete = 'off'; campus.placeholder = status.campusReady ? '已配置 · 输入新密钥以更换' : '校园网关密钥'; campus.setAttribute('aria-label', '校园网关密钥');
-    advanced.append(heading, create('p', 'agent-notice', '这是校内 AI，需要连接浙江大学校园网，效果可能不佳。想获得更佳效果，请在 API 设置中添加自己的 DeepSeek API。校内课件通过 OCR 提取文字，图示关系、公式或表格可能识别不完整。校内服务使用期限截至 2026 年 11 月 1 日，到期后可配置个人 DeepSeek API。'), field('模型网关密钥', campus), this.action('保存到本机', async () => { const key = campus.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('校园网关密钥格式无效'); await this.options.setCampusKey(key); campus.value = ''; this.renderHistory(); this.notice('校园网关已在本机预置。仅在浙大内网环境下可用。'); }));
-    const ocr = create('input'); ocr.type = 'password'; ocr.autocomplete = 'off'; ocr.placeholder = status.campusOCRReady ? '已配置 · 输入新密钥以更换' : '校园 OCR 密钥'; ocr.setAttribute('aria-label', '校园 OCR 密钥');
-    advanced.append(field('课件 OCR 密钥', ocr, '识别文字、公式与版面；图表关系、模糊内容可能识别不完整。'), this.action('保存 OCR 密钥', async () => { const key = ocr.value.trim(); if (!/^[A-Za-z0-9_-]{16,256}$/.test(key)) throw new Error('OCR 密钥格式无效'); await this.options.setCampusOCRKey(key); ocr.value = ''; this.renderHistory(); this.notice('校园 OCR 已在本机预置'); }));
     const footer = create('div', 'agent-settings-footer'); footer.append(this.action('完成', () => this.renderHistory(), 'primary'));
-    this.log.append(advanced, create('p', 'agent-privacy-note', '只在你发起任务时，向所选服务发送完成任务所需的资料。'), footer); this.log.scrollTop = 0; this.root.scrollTop = 0;
+    this.log.append(create('p', 'agent-privacy-note', '只在你发起任务时，向所选服务发送完成任务所需的资料。'), footer); this.log.scrollTop = 0; this.root.scrollTop = 0;
   }
   reset() {
     this.floatingControl?.clear(); this.runner.stop(); this.stopClock(); this.generation++; clearTimeout(this.geometryTimer); this.history = []; this.messages = []; this.currentId = conversationId(); this.loadedOwner = null; this.savedGeometry = null; this.progress = null; this.reply = null; this.turn = null; this.preferredMode = 'floating';

@@ -11,7 +11,7 @@ import './panes.css';
 
 export interface AiTurn { question: string; answer: string; at: number; whole?: boolean; expanded?: boolean; mode?: string; complete?: boolean; references?: Course[] }
 export interface ChatSession { id: string; title: string; turns: AiTurn[]; savedAt: number; scroll?: number }
-export interface AiSettings { personalReady?: boolean; campusReady?: boolean; provider?: string; campusNotice?: string; configured: boolean; model: string; models: string[] }
+export interface AiSettings { personalReady?: boolean; provider?: string; configured: boolean; model: string; models: string[] }
 export interface AiStreamEvent { requestId: string; text?: string; status?: string; done?: boolean; error?: string }
 export interface AiResult { record?: PageSummaryRecord; answer: string; references?: Course[]; completed?: boolean; signature?: string }
 export interface AiPaneProps {
@@ -39,7 +39,6 @@ export function ApiSettings({ configured, onDone, onRefresh }: { configured: boo
   useEffect(() => { if (changing) input.current?.focus(); }, [changing]);
   return <section className="api-setup" aria-label="API 设置">
     <h3>{configured ? 'API 设置' : '启用 AI 辅助学习'}</h3>
-    <p>校内 AI 与 OCR 随安装包预置，需要连接浙江大学校园网，效果可能不佳，使用期限截至 2026 年 11 月 1 日。更佳效果可添加个人 DeepSeek API。</p>
     <p>从 DeepSeek 开放平台获取 API 密钥。密钥加密保存在本机，服务费用由你的 DeepSeek 账户承担。</p>
     <button type="button" className="text-link" onClick={() => { void ipc('app.external', { url: 'https://platform.deepseek.com/' }); }}>打开 DeepSeek 开放平台 ↗</button>
     {changing ? <form onSubmit={event => { event.preventDefault(); void save(); }}>

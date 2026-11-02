@@ -59,8 +59,52 @@ final class SyntheticCourseProtocol:URLProtocol {
             }else{guard bearer==nil else{throw appError("Logout marker was ignored")}}
         }
     }
+    static func sessionRepairContracts()throws{
+        NSApplication.shared.setActivationPolicy(.prohibited)
+        func jwt(_ delta:Double)->String{let payload=try! JSONSerialization.data(withJSONObject:["exp":Date().addingTimeInterval(delta).timeIntervalSince1970]);return "fixture."+payload.base64EncodedString().replacingOccurrences(of:"=",with:"").replacingOccurrences(of:"+",with:"-").replacingOccurrences(of:"/",with:"_")+".signature"}
+        func token(_ value:String,_ domain:String="classroom.zju.edu.cn")->HTTPCookie{HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:"+String(value.count)+":\""+value+"\";}",.domain:domain,.path:"/",.secure:"TRUE"])!}
+        let stale=token(jwt(-3600)),fresh=token(jwt(3600)),duplicate=token(jwt(-3600),".zju.edu.cn")
+        check(cookiesToRestore([fresh],over:[stale]).count==1,"valid snapshot replaces an expired WebKit token of the same scope")
+        check(cookiesToRestore([stale],over:[fresh]).isEmpty,"expired snapshot never overwrites valid live login")
+        check(campusBearer([duplicate,fresh])==campusBearer([fresh]),"stale parent-domain token cannot shadow a valid classroom token")
+        let expired=HTTPCookie(properties:[.name:"_token",.value:"expired",.domain:"classroom.zju.edu.cn",.path:"/",.expires:Date().addingTimeInterval(-100)])!
+        check(cookiesToRestore([expired],over:[]).isEmpty,"expired cookies are never extended by restore")
+        check(officialLoginPage(URL(string:"https://zjuam.zju.edu.cn/cas/login?service=fixture")) && !officialLoginPage(URL(string:"https://zjuam.zju.edu.cn.attacker.invalid/cas/login")) && !officialLoginPage(URL(string:"http://zjuam.zju.edu.cn/cas/login")) && !officialLoginPage(URL(string:"https://zjuam.zju.edu.cn:8443/cas/login")),"remembered password is restricted to the exact HTTPS university login origin")
+        check(!fileStoredCredential(officialLoginCredential),"campus password never enters the plaintext service-key store")
+        let root=FileManager.default.temporaryDirectory.appendingPathComponent("session-repair-contract-"+UUID().uuidString);defer{try? FileManager.default.removeItem(at:root)}
+        let app=App();app.root=root;var backend=[String:Data](),interactive=0
+        app.testKeychainOperation={name,data,remove,allowUI,_ in if allowUI{interactive+=1};if remove{backend.removeValue(forKey:name);return nil};if let data{backend[name]=data;return data};return backend[name]}
+        let remembered=OfficialLoginCredentials(username:"synthetic-id",password:"synthetic-password")
+        let noPassword=App();noPassword.root=root.appendingPathComponent("no-password");noPassword.testSessionKeychain={_,_,_ in nil};try writeLogoutMarker(in:noPassword.root)
+        var restartPrepared=false;noPassword.prepareAutomaticLoginAfterRestart{restartPrepared=true};try waitUntil({restartPrepared})
+        check(noPassword.hasLogoutMarker(),"restart preserves logout without remembered credentials")
+        let hasPassword=App();hasPassword.root=root.appendingPathComponent("with-password");let mockPassword=try JSONEncoder().encode(remembered);hasPassword.testSessionKeychain={name,_,_ in name==officialLoginCredential ? mockPassword:nil};try writeLogoutMarker(in:hasPassword.root)
+        restartPrepared=false;hasPassword.prepareAutomaticLoginAfterRestart{restartPrepared=true};try waitUntil({restartPrepared})
+        check(!hasPassword.hasLogoutMarker(),"fresh process can authenticate after logout when credentials were explicitly saved")
+        let credentials=OfficialLoginCredentials(username:"synthetic-campus-id",password:"synthetic-campus-password")
+        try app.storageQueue.sync{try app.saveOfficialLogin(credentials)}
+        check(interactive==0 && !backend.isEmpty,"explicit password setup uses only noninteractive Keychain access")
+        let jsonFiles=(try? FileManager.default.contentsOfDirectory(at:root,includingPropertiesForKeys:nil)) ?? []
+        check(!jsonFiles.contains{((try? String(contentsOf:$0,encoding:.utf8)) ?? "").contains(credentials.password)},"password is absent from profile files")
+        app.observeSessionCookies();var ready=false;app.restoreCookies{ready=true};try waitUntil({ready});ready=false
+        app.installCookies([fresh]){ready=true};try waitUntil({ready})
+        let vault=SessionVault(root:root.appendingPathComponent("Session"))
+        try waitUntil({vault.read().map{campusBearer(decodedCookies($0))==campusBearer([fresh])} ?? false})
+        check(true,"WebKit token changes are durably observed without closing the app")
+        let rotated=token(jwt(7200));ready=false;app.installCookies([rotated]){ready=true};try waitUntil({ready})
+        try waitUntil({vault.read().map{campusBearer(decodedCookies($0))==campusBearer([rotated])} ?? false})
+        check(true,"rotated official tokens replace the encrypted snapshot immediately")
+        let completionApp=App();completionApp.root=root.appendingPathComponent("completion");completionApp.testSessionKeychain={_,_,_ in nil};var completionReady=false
+        completionApp.restoreCookies(from:try encodedCookies([fresh])){completionReady=true};try waitUntil({completionReady});completionReady=false
+        completionApp.testSessionBootstrap={done in done(true)}
+        completionApp.resumeOfficialSession(force:true){ready in completionReady=ready && SessionVault(root:completionApp.root.appendingPathComponent("Session")).read() != nil};try waitUntil({completionReady})
+        check(true,"successful renewal is durably saved before callers or utility processes can exit")
+        try writeLogoutMarker(in:root);let prior=vault.read();ready=false;app.installCookies([fresh]){ready=true};try waitUntil({ready});RunLoop.current.run(until:Date().addingTimeInterval(0.1))
+        check(vault.read()==prior,"logout marker suppresses observer writes and remembered auto-login")
+    }
     static func main()throws{
         if CommandLine.arguments.count==3,CommandLine.arguments[1].hasPrefix("--cold-session-"){try coldProcess(CommandLine.arguments[1],root:URL(fileURLWithPath:CommandLine.arguments[2],isDirectory:true));return}
+        try sessionRepairContracts()
         for (code,expected) in [(URLError.timedOut,"网络请求超时，请稍后重试"),(.notConnectedToInternet,"当前没有网络连接，请连接网络后重试"),(.networkConnectionLost,"网络连接中断，请重试"),(.cannotFindHost,"无法解析服务器地址，请检查网络"),(.cancelled,"请求已取消"),(.serverCertificateUntrusted,"安全连接校验失败，请检查系统时间或网络")] {
             let error=NSError(domain:NSURLErrorDomain,code:code.rawValue,userInfo:[NSLocalizedDescriptionKey:"English failure with a private URL"])
             check(userError(error)==expected,"URLSession errors have Chinese user messages without URLs or system English")
@@ -155,37 +199,19 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==syntheticSlotSecret && slotValues["campus-app-build-B"]==syntheticSlotSecret,"readable previous slot migrates silently to next build")
         _ = nextSlots.access("campus",nil,remove:true,onError:{slotFailures.append($0)});denyOld=false;slotRequests.removeAll()
         check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==nil && slotRequests.isEmpty,"explicit delete tombstone prevents legacy secret resurrection")
-        // AI service keys live in an owner-only file, so a rebuilt app reads them without Keychain.
-        check(fileStoredCredential(campusGatewayCredential) && fileStoredCredential(campusOCRCredential) && fileStoredCredential("account-deepseek") && !fileStoredCredential("cookies") && !fileStoredCredential("identity"),"AI service keys use the file store; the course session stays in Keychain")
-        let keyFile=slotFolder.appendingPathComponent("service-keys.json"),campusSecret=Data("campus-synthetic-gateway-key".utf8),personalSecret=Data("personal-synthetic-deepseek-key".utf8)
-        var legacyCalls=0,legacyValue:Data?=Data("campus-key-from-readable-older-build".utf8),keyFailures=[OSStatus]()
-        let legacy:ServiceKeyStore.Legacy={value,remove in legacyCalls+=1;if remove{legacyValue=nil;return nil};return value ?? legacyValue}
+        // Personal AI credentials remain private and survive a rebuild.
+        check(fileStoredCredential("account-deepseek") && !fileStoredCredential("cookies") && !fileStoredCredential("identity"),"personal API key uses the owner-only file store")
+        let keyFile=slotFolder.appendingPathComponent("service-keys.json"),personalSecret=Data("personal-synthetic-deepseek-key".utf8)
+        var keyFailures=[OSStatus](),legacyCalls=0
+        let legacy:ServiceKeyStore.Legacy={_,_ in legacyCalls+=1;return nil}
         let firstBuild=ServiceKeyStore(url:keyFile)
-        check(firstBuild.access(campusGatewayCredential,nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==legacyValue && legacyCalls==1,"a readable older key moves into the file once")
-        check(firstBuild.access(campusGatewayCredential,campusSecret,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==campusSecret && firstBuild.access("account-deepseek",personalSecret,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==personalSecret,"campus and personal keys are saved")
+        check(firstBuild.access("account-deepseek",personalSecret,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==personalSecret,"personal key is saved")
         let keyMode=(try FileManager.default.attributesOfItem(atPath:keyFile.path))[.posixPermissions] as? Int
         check(keyMode==0o600 && keyFailures.isEmpty,"service key file is owner-only")
-        legacyCalls=0;let rebuilt=ServiceKeyStore(url:keyFile)
-        check(rebuilt.access(campusGatewayCredential,nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==campusSecret && rebuilt.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==personalSecret && legacyCalls==0,"a rebuilt app reads campus and personal keys without touching Keychain")
+        let rebuilt=ServiceKeyStore(url:keyFile)
+        check(rebuilt.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==personalSecret && legacyCalls==0,"a rebuilt app reads the personal key without touching Keychain")
         _ = rebuilt.access("account-deepseek",nil,remove:true,onError:{keyFailures.append($0)},legacy:legacy)
-        let keysAfterRemoval=try String(contentsOf:keyFile,encoding:.utf8)
-        check(rebuilt.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==nil && !keysAfterRemoval.contains("personal-synthetic") && keysAfterRemoval.contains("campus-synthetic"),"removing one key clears it and keeps the others")
-        // The previous build kept the two campus keys in campus-services.json; they carry over once.
-        let earlierFolder=slotFolder.appendingPathComponent("earlier"),earlierFile=earlierFolder.appendingPathComponent("campus-services.json")
-        try FileManager.default.createDirectory(at:earlierFolder,withIntermediateDirectories:true);try JSONEncoder().encode([campusOCRCredential:"campus-synthetic-ocr-key"]).write(to:earlierFile)
-        let upgraded=ServiceKeyStore(url:earlierFolder.appendingPathComponent("service-keys.json"),earlier:earlierFile)
-        check(upgraded.access(campusOCRCredential,nil,remove:false,onError:{keyFailures.append($0)},legacy:{_,_ in nil})==Data("campus-synthetic-ocr-key".utf8) && !FileManager.default.fileExists(atPath:earlierFile.path),"campus keys saved by the previous build carry over to the general file")
-        let bundleFixture=slotFolder.appendingPathComponent("CampusServices.json")
-        try JSONEncoder().encode(["modelKey":"fixture-campus-model-123456789", "ocrKey":"pk_fixture_campus_ocr_123456789", "personalDeepSeek":"must-never-import-this"]).write(to:bundleFixture)
-        let defaults=bundledCampusCredentials(bundleFixture)
-        check(defaults.count==2 && defaults[campusGatewayCredential]=="fixture-campus-model-123456789" && defaults["account-deepseek"]==nil,"only the two campus defaults are loaded; personal fields are excluded")
-        var bundledLegacyCalls=0
-        let freshKeys=ServiceKeyStore(url:slotFolder.appendingPathComponent("fresh-services.json"),bundled:defaults)
-        check(freshKeys.access(campusGatewayCredential,nil,remove:false,onError:{_ in},legacy:{_,_ in bundledLegacyCalls+=1;return nil})==Data("fixture-campus-model-123456789".utf8) && bundledLegacyCalls==0,"a clean install can use bundled campus services without a keychain request")
-        check(!FileManager.default.fileExists(atPath:freshKeys.url.path),"using defaults does not manufacture a user profile")
-        _=freshKeys.access(campusGatewayCredential,Data("manual-campus-override".utf8),remove:false,onError:{_ in},legacy:{_,_ in nil})
-        check(freshKeys.access(campusGatewayCredential,nil,remove:false,onError:{_ in},legacy:{_,_ in nil})==Data("manual-campus-override".utf8),"a manual local campus key takes priority")
-        check(bundledCampusCredentials(nil).isEmpty,"plain source builds keep personal API mode when no campus resource is present")
+        check(!((try String(contentsOf:keyFile,encoding:.utf8)).contains("personal-synthetic")),"removing the key clears it")
         // Real WKWebView, real App WKUIDelegate methods, isolated nonpersistent data
         // store and hidden window. No account/keychain reads or external requests.
         let application=NSApplication.shared;application.setActivationPolicy(.prohibited)
@@ -245,7 +271,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(app.selectedTheme=="collage","theme can switch back without reloading web view")
         check(app.themeIdentifiers==["collage","playful","film"],"three stable native colour scheme identifiers")
         for (old,now) in [("swiss","collage"),("terminal","collage"),("candy","playful"),("gallery","playful"),("field","film"),("racing","film")]{isolatedThemeDefaults.set(old,forKey:"appearanceTheme");check(app.selectedTheme==now,"retired theme "+old+" maps to "+now)}
-        check(app.selectedMode=="system","appearance follows the system by default")
+        check(app.selectedMode=="light","appearance uses the selected light default")
         app.applyAppearanceMode("dark");check(app.selectedMode=="dark" && window.appearance?.name == .darkAqua,"dark appearance persists and applies to the window")
         app.applyAppearanceMode("neon");check(app.selectedMode=="dark","unknown appearance cannot alter selection")
         app.applyAppearanceMode("system");check(app.selectedMode=="system" && window.appearance==nil,"system appearance clears the window override")
@@ -328,6 +354,36 @@ final class SyntheticCourseProtocol:URLProtocol {
         localStream.consume(Data(#"{"message":{"content":"本地"},"done":false}"#.utf8));localStream.consume(Data([10]));localStream.consume(Data((#"{"message":{"content":"成功","tool_calls":[{"function":{"name":"navigate","arguments":{"page":"home"}}}]},"done":true,"prompt_eval_count":12,"eval_count":3}"#+"\n").utf8))
         check(localStream.answer=="本地成功" && localEvents.count==2 && localStream.calls.count==1 && (localStream.calls[0]?["function"] as? [String:Any])?["arguments"] is String,"local NDJSON streams incremental text and normalizes tool arguments for the agent")
         localStream.session.invalidateAndCancel()
+        check(LocalGemmaService.supports("gemma4:31b-mlx") && LocalGemmaService.supports("qwen3.8:27b") && LocalGemmaService.supports("qwen3.8-uncensored:27b"),"local catalog admits Gemma and the two installed Qwen aliases")
+        check(!LocalGemmaService.supports("qwen3.8:cloud") && !LocalGemmaService.supports("qwen3.8-uncensored:27b-extra") && !LocalGemmaService.supports("deepseek-chat"),"Qwen catalog matching is exact and excludes arbitrary or cloud models")
+        let localTools:[[String:Any]]=[["type":"function","function":["name":"navigate","description":"Open a local page","parameters":["type":"object","properties":["page":["type":"string"]]]]]]
+        let toolHistory:[[String:Any]]=[["role":"assistant","content":"","reasoning_content":"not reused","tool_calls":[["id":"call-local","type":"function","function":["name":"navigate","arguments":"{\"page\":\"home\"}"]]]],["role":"tool","tool_call_id":"call-local","content":"opened home"]]
+        for model in ["qwen3.8:27b","qwen3.8-uncensored:27b"]{
+            for port in [11439,11434]{
+                let request=try localGemmaRequest(base:URL(string:"http://127.0.0.1:\(port)")!,model:model,messages:localMessages+toolHistory,tools:localTools)
+                let body=try JSONSerialization.jsonObject(with:request.httpBody!) as! [String:Any],history=body["messages"] as! [[String:Any]],parts=history[3]["content"] as! [[String:Any]],calls=history[4]["tool_calls"] as! [[String:Any]]
+                check(request.url?.path=="/v1/chat/completions" && request.url?.port==port && request.value(forHTTPHeaderField:"Authorization")==nil && body["model"] as? String==model,"Qwen uses the exact local OpenAI endpoint and model without a cloud key")
+                check(body["reasoning_effort"] as? String=="none" && body["max_tokens"] as? Int==4096 && body["stream"] as? Bool==true,"Qwen preserves the local non-thinking policy and output budget")
+                check(history.count==6 && (parts.last?["image_url"] as? [String:String])?["url"]=="data:image/png;base64,aW1hZ2U=" && history[1]["content"] as? String=="remember earlier turn","Qwen preserves ordered history and data URL images for the OpenAI backend")
+                check((calls[0]["function"] as? [String:String])?["arguments"]=="{\"page\":\"home\"}" && history[5]["tool_call_id"] as? String=="call-local" && history[4]["reasoning_content"]==nil && (body["tools"] as? [[String:Any]])?.count==1,"Qwen keeps OpenAI tool arguments and result linkage without stale hidden reasoning")
+            }
+        }
+        for image in ["https://private.example/image.png","file:///tmp/image.png","data:image/png;base64,%%%","data:image/png;base64,"]{
+            do{_ = try localGemmaRequest(base:URL(string:"http://127.0.0.1:11439")!,model:"qwen3.8:27b",messages:[["role":"user","content":[["type":"image_url","image_url":["url":image]]]]]);fatalError("non-local or invalid Qwen image accepted")}catch{checks+=1}
+        }
+        do{_ = try localGemmaRequest(base:URL(string:"http://127.0.0.1:11439")!,model:"qwen3.8:27b",messages:[["role":"user","content":[["type":"image","source":["type":"url","url":"https://private.example/image.png"]]]]]);fatalError("alternate remote image shape accepted")}catch{checks+=1}
+        let unsupportedService=LocalGemmaService();var unsupportedError:String?
+        unsupportedService.prepare(model:"qwen3.8:cloud"){_,_,error in unsupportedError=error}
+        check(unsupportedError != nil,"unsupported local alias is rejected synchronously before discovery or launching a helper")
+        unsupportedService.shutdown()
+        for base in ["https://example.invalid","http://127.0.0.1:11437","http://user:secret@127.0.0.1:11439","http://127.0.0.1:11439?forward=cloud"]{
+            do{_ = try localGemmaRequest(base:URL(string:base)!,model:"qwen3.8:27b",messages:localMessages);fatalError("unapproved local endpoint accepted")}catch{checks+=1}
+        }
+        let qwenStream=AIStream(try localGemmaRequest(base:URL(string:"http://127.0.0.1:11439")!,model:"qwen3.8-uncensored:27b",messages:localMessages),start:false,event:{_ in},done:{_,_ in})
+        qwenStream.consume(Data((#"data: {"choices":[{"delta":{"content":"本地 Qwen","tool_calls":[{"index":0,"id":"call-qwen","function":{"name":"navigate","arguments":"{\"page\":"}}]}}]}"#+"\n").utf8))
+        qwenStream.consume(Data((#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"home\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"completion_tokens":7}}"#+"\n\ndata: [DONE]\n").utf8))
+        check(qwenStream.answer=="本地 Qwen" && qwenStream.finishReason=="tool_calls" && (qwenStream.calls[0]?["function"] as? [String:String])?["arguments"]=="{\"page\":\"home\"}" && qwenStream.usage["completion_tokens"] as? Int==7,"local Qwen SSE preserves incremental tool calls and usage")
+        qwenStream.session.invalidateAndCancel()
         let vaultRoot=isolated.appendingPathComponent("sealed-contract"),vault=SessionVault(root:vaultRoot),secret=Data("synthetic-session-secret".utf8)
         try vault.save(secret);let ciphertext=try Data(contentsOf:vaultRoot.appendingPathComponent("session.sealed"))
         check(!ciphertext.contains(secret) && vault.read()==secret,"protected snapshot is encrypted and decrypts across app instances")
@@ -526,28 +582,21 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(renderedText=="Preparing classroom" && bootRestored==0,"startup WebKit interface loads before credential approval finishes")
         credentialLatch.signal();try waitUntil({bootRestored==2});check(bootReads==2,"startup current and legacy cookie reads are each singleflight for concurrent callers")
         bootApp.listener.cancel();bootApp.web.navigationDelegate=nil;bootApp.web.stopLoading()
-        var providerKeys=[campusGatewayCredential:Data("campus-synthetic-key".utf8)],aiRequests=[URLRequest]()
+        var providerKeys=[String:Data](),aiRequests=[URLRequest]()
         app.storageQueue.sync{app.credentialCache.invalidate()}
         app.testKeychainOperation={name,data,remove,allowUI,onError in if remove{providerKeys.removeValue(forKey:name);return nil};if let data=data{providerKeys[name]=data};return providerKeys[name]}
         app.testAIRequest={aiRequests.append($0)}
-        let gatewayStatus=try bridgeCall("aiStatus") as! [String:Any]
-        check(gatewayStatus["campusReady"] as? Bool==true && gatewayStatus["personalReady"] as? Bool==false,"gateway status reports readiness without revealing credentials")
         let aiMessage:[[String:Any]]=[["role":"user","content":"Synthetic connection test"]]
-        _ = try bridgeCall("ai",["messages":aiMessage]);check(aiRequests.last?.url?.absoluteString==campusGatewayEndpoint,"missing personal key defaults to fixed campus gateway")
-        let gatewayBody=try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any]
-        check(gatewayBody["model"] as? String==campusGatewayModel && gatewayBody["thinking"]==nil,"campus gateway uses its exact model without unsupported thinking option")
-        check(aiRequests.last?.value(forHTTPHeaderField:"Authorization")=="Bearer campus-synthetic-key","gateway uses its separate protected credential")
+        let missing=try bridgeCall("aiStatus") as! [String:Any]
+        check(missing["personalReady"] as? Bool==false,"missing personal key is reported")
+        do{_ = try bridgeCall("ai",["messages":aiMessage]);fatalError("missing key accepted")}catch{check(aiRequests.isEmpty,"missing key never starts a request")}
         providerKeys[app.account+"-deepseek"]=Data("personal-synthetic-key".utf8);app.storageQueue.sync{app.credentialCache.invalidate()}
-        _ = try bridgeCall("ai",["messages":aiMessage]);check(aiRequests.last?.url?.host=="api.deepseek.com","auto prefers configured personal API")
-        _ = try bridgeCall("ai",["messages":aiMessage,"provider":"campus"]);check(aiRequests.last?.url?.host=="modelgateway.zju.edu.cn","explicit campus selection overrides personal API")
-        do{_ = try bridgeCall("ai",["messages":aiMessage,"provider":"https://untrusted.example"]);fatalError("arbitrary AI endpoint accepted")}catch{check(aiRequests.count==3,"unregistered AI endpoint never starts network access")}
+        _ = try bridgeCall("ai",["messages":aiMessage]);check(aiRequests.last?.url?.host=="api.deepseek.com","auto uses configured personal API")
+        do{_ = try bridgeCall("ai",["messages":aiMessage,"provider":"https://untrusted.example"]);fatalError("arbitrary AI endpoint accepted")}catch{check(aiRequests.count==1,"unregistered AI endpoint never starts network access")}
         _ = try bridgeCall("ai",["messages":aiMessage,"provider":"personal","purpose":"agent","reasoning_effort":"high"])
         let agentBody=try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any]
-        check((agentBody["thinking"] as? [String:String])?["type"]=="enabled" && agentBody["reasoning_effort"] as? String=="high","personal agent enables documented thinking and effort")
+        check((agentBody["thinking"] as? [String:String])?["type"]=="enabled" && agentBody["reasoning_effort"] as? String=="high","personal agent enables thinking and effort")
         check(agentBody["max_tokens"] as? Int==16384,"agent has room for reasoning and complete tool arguments")
-        _ = try bridgeCall("ai",["messages":aiMessage,"provider":"campus","purpose":"agent","reasoning_effort":"high"])
-        let campusAgentBody=try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any]
-        check(campusAgentBody["thinking"]==nil && campusAgentBody["reasoning_effort"]==nil && campusAgentBody["model"] as? String==campusGatewayModel,"local gateway keeps its own protocol without unsupported personal parameters")
         let countBeforeInvalid=aiRequests.count
         do{_ = try bridgeCall("ai",["messages":aiMessage,"purpose":"agent","reasoning_effort":"arbitrary"]);fatalError("invalid reasoning effort accepted")}catch{check(aiRequests.count==countBeforeInvalid,"invalid effort is rejected before external request")}
         let longerTask=Array(repeating:["role":"user","content":"synthetic step"],count:105)
@@ -561,10 +610,6 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(streamResult["reasoning_content"] as? String=="private reasoning" && visibleDeltas==["Visible result"],"SSE preserves reasoning across fragmented CRLF chunks without revealing it to UI")
         check(streamResult["finish_reason"] as? String=="tool_calls" && (streamResult["calls"] as? [[String:Any]])?.count==1,"SSE keeps finish reason and tool calls for a complete agent round")
         stream.session.invalidateAndCancel()
-        _ = try bridgeCall("campusGateway",["key":"synthetic-campus-provision-12345"]);check(providerKeys[campusGatewayCredential]==Data("synthetic-campus-provision-12345".utf8),"local campus provisioning saves only to credential backend")
-        let structuredOCR: [String:Any] = ["errorCode":0,"result":["layoutParsingResults":[["markdown":["text":"# Formula\n$x=2$"],"outputImages":["layout":"discarded-image-bytes"]]]]]
-        check(try campusLayoutText(JSONSerialization.data(withJSONObject:structuredOCR))=="# Formula\n$x=2$","layout OCR preserves Markdown and formula while excluding image payloads")
-        do{_ = try campusLayoutText(Data("{\"errorCode\":1}".utf8));fatalError("OCR error accepted")}catch{checks+=1}
         let ocrImage=NSImage(size:NSSize(width:700,height:160));ocrImage.lockFocus();NSColor.white.setFill();NSRect(x:0,y:0,width:700,height:160).fill();NSAttributedString(string:"SYNTHETIC 42",attributes:[.font:NSFont.systemFont(ofSize:50),.foregroundColor:NSColor.black]).draw(at:NSPoint(x:30,y:50));ocrImage.unlockFocus()
         let ocrPNG=NSBitmapImageRep(data:ocrImage.tiffRepresentation!)!.representation(using:.png,properties:[:])!
         let ocrResult=try bridgeCall("recognizeSlide",["image":"data:image/png;base64,"+ocrPNG.base64EncodedString()]) as! [String:Any]

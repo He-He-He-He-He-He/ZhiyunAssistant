@@ -85,11 +85,9 @@ test('agent text input preserves Shift Enter and IME commit and never leaks less
  const key=props=>assistant.input.dispatchEvent(new r.win.KeyboardEvent('keydown',{bubbles:true,cancelable:true,key:'Enter',...props}));
  key({shiftKey:true});key({isComposing:true});assert.equal(submitted,0);key({});assert.equal(submitted,1);
 });
-test('AI connection defaults to provisioned campus gateway and personal key takes precedence without exposing either key',async()=>{
- const r=runtime();try{const{AIConnection,CAMPUS_NOTICE}=await r.load('ai-connection.js');let status={personalReady:false,campusReady:true},prefs={};const calls=[];
- const connection=new AIConnection({call:async(action)=>{calls.push(action);return status}},()=>prefs);
- assert.equal(await connection.refresh(),true);assert.equal(connection.provider(),'auto');assert.equal(connection.effective(),'campus');assert.ok(connection.description().includes(CAMPUS_NOTICE));assert.equal(JSON.stringify(connection.request()),'{"provider":"auto"}');
- status={personalReady:true,campusReady:true};await connection.refresh();assert.equal(connection.effective(),'personal');prefs.aiProvider='campus';assert.equal(connection.effective(),'campus');prefs.aiProvider='personal';status={personalReady:false,campusReady:true};await connection.refresh();assert.equal(connection.available(),false);assert.deepEqual(calls,['aiStatus','aiStatus','aiStatus']);
+test('AI connection uses only configured personal or local models',async()=>{
+ const r=runtime();try{const{AIConnection}=await r.load('ai-connection.js');let status={personalReady:false},prefs={aiProvider:'campus'};const connection=new AIConnection({call:async()=>status},()=>prefs);
+ assert.equal(await connection.refresh(),false);assert.equal(connection.provider(),'auto');assert.equal(connection.effective(),'personal');status={personalReady:true};assert.equal(await connection.refresh(),true);assert.equal(connection.effective(),'personal');assert.equal(JSON.stringify(connection.request()),'{"provider":"auto"}');
  }finally{r.win.close()}
 });
 test('natural language operations can adjust and persist real pane layout but cannot bypass its lock',async t=>{
@@ -113,9 +111,8 @@ test('assistant collapses intermediate narration into one expandable activity an
  assert.equal(doc.querySelectorAll('.agent-progress').length,1);assert.equal(doc.querySelector('.agent-progress').open,false);assert.ok(!assistant.log.textContent.includes('长篇中间叙述'));assert.ok(assistant.log.textContent.includes('已整理。'));assert.equal(assistant.activity().steps[0].ok,true);
  assistant.history=[{role:'assistant',content:'已整理。',activity:assistant.activity()}];assistant.renderHistory();assert.equal(doc.querySelector('.agent-progress').open,false);
 });
-test('AI settings render thinking choices and keep an explicit campus provider when provisioning a key',async t=>{
- const{r,assistant,doc}=await fixture(t);await assistant.show();await assistant.settings();assert.equal(doc.querySelector('[aria-label="助手思考强度"]')?.options.length,3);const source=doc.querySelector('[aria-label="AI服务来源"]');source.value='campus';source.dispatchEvent(new r.win.Event('change'));await new Promise(resolve=>setTimeout(resolve,10));assert.equal(doc.querySelector('[aria-label="助手思考强度"]').closest('label').hidden,true);
- const entry=doc.querySelector('[aria-label="校园网关密钥"]');entry.value='synthetic-campus-local-key';[...doc.querySelectorAll('.agent-gateway-config button')].find(b=>b.textContent.includes('保存到本机')).click();await new Promise(resolve=>setTimeout(resolve,20));assert.equal(assistant.options.provider(),'campus');
+test('AI settings offer personal and local models without retired services',async t=>{
+ const{assistant,doc}=await fixture(t);await assistant.show();await assistant.settings();assert.equal(doc.querySelector('[aria-label="助手思考强度"]')?.options.length,3);const source=doc.querySelector('[aria-label="AI服务来源"]');assert.deepEqual([...source.options].map(o=>o.value),['auto','personal','local']);assert.equal(doc.querySelector('.agent-gateway-config'),null);
 });
 test('expanded commands operate notes, colour and common feature order through production handlers',async t=>{
  const{a,actions}=await fixture(t);await a.enter({courseId:'course',subId:'lesson',title:'Synthetic Course',start:1700000000,end:1700003600,status:'6'});const note=await actions.execute('note_create',{name:'第二篇'});await actions.execute('note_open',{id:note.id});assert.equal(a.activeNote().id,note.id);await actions.execute('note_palette',{source:'mine',color:'#EAF5ED'});assert.equal(a.state().prefs.notePalette.mine,'#EAF5ED');await actions.execute('set_common_features',{order:['notes','transcript','summary']});assert.deepEqual(Array.from(a.state().prefs.commonOrder),['notes','transcript','summary']);await actions.execute('note_insert_transcript',{from:0,to:59});assert.ok(a.activeNote().html.includes('Fixture sentence one'));await assert.rejects(actions.execute('note_delete',{id:note.id}),/confirm:true/);assert.ok(a.state().notes.some(n=>n.id===note.id));await actions.execute('note_delete',{id:note.id,confirm:true});assert.ok(!a.state().notes.some(n=>n.id===note.id));

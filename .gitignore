@@ -1,3 +1,26 @@
-
-# Authorized school services are injected by the release builder, never committed.
+# Local dependencies, build artifacts and private configuration
+**/node_modules/
+**/oh_modules/
+**/build/
+**/dist/
+**/staging-app/
+**/.hvigor/
+**/local.properties
+**/build-profile.json5
 **/CampusServices.json
+**/service-keys.json
+**/*.p12
+**/*.pfx
+**/*.mobileprovision
+**/*.p7b
+**/.env
+**/.env.*
+**/__pycache__/
+**/*.pyc
+**/*.log
+**/work/
+**/release/
+**/*.hap
+**/*.apk
+**/*.keystore
+**/*.jks

@@ -32,13 +32,13 @@ func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=fals
             var status=SecItemUpdate(query as CFDictionary,[kSecValueData as String:data] as CFDictionary)
             if status==errSecItemNotFound{
                 var add=query;add[kSecValueData as String]=data;add[kSecAttrAccessible as String]=kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-                add[kSecAttrLabel as String]=(name.hasPrefix("cookies") || name.hasPrefix(persistedSessionCredential)) ? "智云助手 · 智云课堂会话":name.hasPrefix("identity") ? "智云助手 · 账号信息":name.hasPrefix(campusGatewayCredential) ? "智云助手 · 浙大校园网关":name.hasPrefix(campusOCRCredential) ? "智云助手 · 校园课件OCR":"智云助手 · DeepSeek API密钥"
-                add[kSecAttrDescription as String]=(name.hasPrefix("cookies") || name.hasPrefix(persistedSessionCredential)) ? "恢复课堂登录会话，不保存校园密码":name.hasPrefix("identity") ? "恢复账号和本机学习入口":"用于课程问答和本页速览"
+                add[kSecAttrLabel as String]=(name.hasPrefix("cookies") || name.hasPrefix(persistedSessionCredential)) ? "智云助手 · 智云课堂会话":name.hasPrefix(officialLoginCredential) ? "智云助手 · 校园自动登录":name.hasPrefix("identity") ? "智云助手 · 账号信息":"智云助手 · DeepSeek API密钥"
+                add[kSecAttrDescription as String]=(name.hasPrefix("cookies") || name.hasPrefix(persistedSessionCredential)) ? "恢复课堂登录会话，不保存校园密码":name.hasPrefix(officialLoginCredential) ? "仅用于浙江大学官方认证，保存在本机钥匙串":name.hasPrefix("identity") ? "恢复账号和本机学习入口":"用于课程问答和本页速览"
                 status=SecItemAdd(add as CFDictionary,nil)
             }
             guard status==errSecSuccess else{onError?(status);return nil};return data
         }
-        var lookup=query;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne
+        var lookup=query;lookup[kSecUseAuthenticationUI as String]=kSecUseAuthenticationUIFail;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne
         var output:CFTypeRef?;let status=SecItemCopyMatching(lookup as CFDictionary,&output)
         guard status==errSecSuccess else{if status != errSecItemNotFound{onError?(status)};return nil};return output as? Data
     })}catch{onError?(OSStatus((error as NSError).code));return nil}
@@ -87,11 +87,11 @@ final class CredentialSlots {
 
 /// AI service keys must outlive app updates. An ad-hoc rebuild can never silently read a Keychain
 /// item another build created: the item's partition rejects it even with an open access list, and
-/// this app never prompts. So the campus model gateway key, the campus layout OCR key and each
+/// this app never prompts. Each
 /// account's personal DeepSeek key live in an owner-only file in the app's data folder; the course
 /// session and account identity stay in Keychain. A key an earlier build stored and this build can
-/// still read moves into the file once, as does the campus file the previous build wrote.
-func fileStoredCredential(_ name:String)->Bool{name==campusGatewayCredential || name==campusOCRCredential || name.hasSuffix("-deepseek")}
+/// still read moves into the file once.
+func fileStoredCredential(_ name:String)->Bool{name.hasSuffix("-deepseek")}
 final class ServiceKeyStore {
     typealias Legacy=(Data?,Bool)->Data?
     let url:URL,earlier:URL?,bundled:[String:String]
@@ -119,7 +119,6 @@ final class ServiceKeyStore {
             rows[name]=text;do{try save(rows)}catch{onError(errSecIO);return nil};return data
         }
         if let text=rows[name]{return Data(text.utf8)}
-        if [campusGatewayCredential,campusOCRCredential].contains(name),let text=bundled[name],!text.isEmpty{return Data(text.utf8)}
         guard let stored=legacy(nil,false) else{return nil}
         if let text=String(data:stored,encoding:.utf8){rows[name]=text;try? save(rows)}
         return stored
@@ -150,24 +149,7 @@ final class KeychainMemoryCache {
 // properties directly. Session cookies remain session cookies when restored; keeping
 // their encrypted snapshot never treats the account identity as proof of access.
 let persistedSessionCredential = "session-cookies-v2"
-let campusGatewayCredential = "campus-model-gateway-v1"
-let campusGatewayEndpoint = "https://modelgateway.zju.edu.cn/v1/chat/completions"
-let campusGatewayModel = "deepseek-v4-flash-780k-local"
-let campusOCRCredential = "campus-layout-ocr-v1"
-let campusOCREndpoint = "https://mcp.zju.edu.cn/api/protal/proxy/system/layout-parsing"
-func bundledCampusCredentials(_ url:URL?)->[String:String]{
-    guard let url,let data=try? Data(contentsOf:url),data.count<16384,let value=try? JSONDecoder().decode([String:String].self,from:data),let model=value["modelKey"],let ocr=value["ocrKey"],model.range(of:"^[A-Za-z0-9_-]{16,256}$",options:.regularExpression) != nil,ocr.range(of:"^pk_[A-Za-z0-9_-]{16,256}$",options:.regularExpression) != nil else{return [:]}
-    return [campusGatewayCredential:model,campusOCRCredential:ocr]
-}
-func campusLayoutText(_ data:Data)throws->String{
-    guard data.count<32*1024*1024,let body=try JSONSerialization.jsonObject(with:data) as? [String:Any],(body["errorCode"] as? Int ?? -1)==0,let result=body["result"] as? [String:Any],let pages=result["layoutParsingResults"] as? [[String:Any]] else{throw appError("校园OCR未返回有效的识别结果")}
-    let text=pages.prefix(12).compactMap{page -> String? in
-        if let markdown=page["markdown"] as? [String:Any],let text=markdown["text"] as? String,!text.isEmpty{return text}
-        guard let pruned=page["prunedResult"] as? [String:Any],let blocks=pruned["parsing_res_list"] as? [[String:Any]] else{return nil}
-        return blocks.sorted{($0["block_order"] as? Int ?? 0)<($1["block_order"] as? Int ?? 0)}.compactMap{$0["block_content"] as? String}.joined(separator:"\n")
-    }.joined(separator:"\n\n")
-    guard !text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty else{throw appError("校园OCR未识别出文字或公式")};return String(text.prefix(30000))
-}
+let officialLoginCredential = "official-login-v1"
 func logoutMarker(in root:URL)->URL{root.appendingPathComponent("session-logged-out")}
 func writeLogoutMarker(in root:URL)throws{
     try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true);try Data("1".utf8).write(to:logoutMarker(in:root),options:.atomic)
@@ -215,13 +197,24 @@ func decodedCookies(_ data:Data,now:Date=Date())->[HTTPCookie] {
 }
 func campusBearer(_ cookies:[HTTPCookie])->String? {
     let target=URL(string:"https://classroom.zju.edu.cn/")!,allowed=cookies.filter{cookieApplies($0,to:target) && $0.name=="_token"}.sorted{$0.path.count>$1.path.count}
+    var stale:String?
     for cookie in allowed {
         var value=cookie.value
         for _ in 0..<2{guard let decoded=value.removingPercentEncoding,decoded != value else{break};value=decoded}
         guard let regex=try? NSRegularExpression(pattern:"s:\\d+:\"_token\";(?:i:\\d+;)?s:\\d+:\"([^\"\\r\\n]+)\""),let match=regex.firstMatch(in:value,range:NSRange(value.startIndex...,in:value)),let range=Range(match.range(at:1),in:value) else{continue}
-        return String(value[range])
+        let token=String(value[range]);if !bearerNeedsRenewal(token){return token};if stale==nil{stale=token}
     }
-    return nil
+    return stale
+}
+// Retain WebKit's newer cookies, but do not let a stale token shadow a valid
+// encrypted snapshot after a cold start. Expired cookies are never resurrected.
+func cookiesToRestore(_ saved:[HTTPCookie],over existing:[HTTPCookie])->[HTTPCookie]{
+    saved.filter{candidate in
+        guard trustedCookieDomain(candidate.domain),candidate.expiresDate==nil || candidate.expiresDate!>Date() else{return false}
+        guard let live=existing.first(where:{$0.name==candidate.name && $0.domain==candidate.domain && $0.path==candidate.path}) else{return true}
+        guard candidate.name=="_token" else{return false}
+        return bearerNeedsRenewal(campusBearer([live])) && !bearerNeedsRenewal(campusBearer([candidate]))
+    }
 }
 func authenticationExpired(_ response:HTTPURLResponse,_ data:Data)->Bool {
     if response.statusCode==403 {
@@ -247,7 +240,7 @@ func authenticationExpired(_ response:HTTPURLResponse,_ data:Data)->Bool {
 func replayableCourseRead(_ url:URL,body:String)->Bool {
     body.isEmpty || (url.host == "classroom.zju.edu.cn" && url.path == "/courseapi/v2/course/video-and-live-promission-by-user-id")
 }
-let officialSessionURL=URL(string:"https://tgmedia.cmc.zju.edu.cn?forward=https%3A%2F%2Fclassroom.zju.edu.cn%2F&tenant_code=112")!
+let officialSessionURL=URL(string:"https://tgmedia.cmc.zju.edu.cn/index.php?r=auth/login&auType=&tenant_code=112&forward=https%3A%2F%2Fclassroom.zju.edu.cn%2F")!
 func bearerNeedsRenewal(_ bearer:String?,now:Date=Date())->Bool {
     guard let bearer=bearer else{return true};let parts=bearer.split(separator:".",omittingEmptySubsequences:false)
     guard parts.count==3 else{return false};var payload=String(parts[1]).replacingOccurrences(of:"-",with:"+").replacingOccurrences(of:"_",with:"/")
@@ -255,6 +248,32 @@ func bearerNeedsRenewal(_ bearer:String?,now:Date=Date())->Bool {
     guard let bytes=Data(base64Encoded:payload),let json=try? JSONSerialization.jsonObject(with:bytes) as? [String:Any],let expiry=json["exp"] as? Double else{return false}
     return expiry<=now.timeIntervalSince1970+30
 }
+struct OfficialLoginCredentials:Codable {
+    let username:String,password:String
+    var valid:Bool{!username.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && username.utf8.count<=128 && !password.isEmpty && password.utf8.count<=1024 && !username.contains("\0") && !password.contains("\0")}
+}
+func officialLoginPage(_ url:URL?)->Bool{
+    guard let url else{return false};return url.scheme=="https" && url.host?.lowercased()=="zjuam.zju.edu.cn" && (url.port==nil || url.port==443) && url.user==nil && url.password==nil && url.path=="/cas/login"
+}
+// Arguments stay inside the native bridge and the university's top-level login
+// page. No credential is sent to the learning UI, logs, URL query, or local file.
+let officialLoginJavaScript = #"""
+if (window.top !== window || location.origin !== 'https://zjuam.zju.edu.cn' || location.pathname !== '/cas/login') return 'wrong-origin';
+const form = document.querySelector('form#fm1'), user = form?.querySelector('input#username[name=username]'), pass = form?.querySelector('input#password[name=password][type=password]'), button = form?.querySelector('#dl');
+if (!form || !user || !pass || !button) return 'not-form';
+const action = new URL(form.getAttribute('action') || location.href, location.href);
+if (action.origin !== location.origin || action.pathname !== '/cas/login' || form.method.toLowerCase() !== 'post') return 'wrong-action';
+const visible = e => !!e && getComputedStyle(e).display !== 'none' && getComputedStyle(e).visibility !== 'hidden' && e.getClientRects().length > 0;
+if (visible(document.querySelector('#kaptcha')) || visible(form.querySelector('input[autocomplete=one-time-code]')) || document.querySelector('#errormsg')?.textContent?.trim()) return 'needs-user';
+if (document.documentElement.dataset.zhiyunAutoSubmitted === 'true') return 'already-submitted';
+user.value = username; user.dispatchEvent(new Event('input', {bubbles:true})); user.dispatchEvent(new Event('change', {bubbles:true}));
+pass.value = password; pass.dispatchEvent(new Event('input', {bubbles:true})); pass.dispatchEvent(new Event('change', {bubbles:true}));
+await new Promise(resolve => setTimeout(resolve, 300));
+if (visible(document.querySelector('#kaptcha')) || visible(form.querySelector('input[autocomplete=one-time-code]'))) { pass.value = ''; return 'needs-user'; }
+document.documentElement.dataset.zhiyunAutoSubmitted = 'true';
+const remember = form.querySelector('input#rember[name=rememberMe]'); if (remember) remember.checked = true;
+button.click(); return 'submitted';
+"""#
 // Ad-hoc app updates have different Keychain partitions. Keep an encrypted,
 // owner-only session snapshot independent of the executable signature. No campus
 // password is stored. Legacy Keychain snapshots are imported silently once.
@@ -411,15 +430,22 @@ final class Download: NSObject, URLSessionDownloadDelegate {
 final class LocalGemmaService {
     private let session:URLSession
     private var ownedServer:Process?
+    private let leaseQueue=DispatchQueue(label:"cn.suike.mac.local-model-lease",qos:.utility)
+    private var sharedLease:Process?,leaseReady=false,leaseAnnounced=false,closing=false
+    private var leaseOutput:FileHandle?,leaseOutputBuffer=Data()
+    private var leaseWaiters=[(String?)->Void]()
     init(){let config=URLSessionConfiguration.ephemeral;config.connectionProxyDictionary=[:];config.urlCache=nil;config.httpCookieStorage=nil;session=URLSession(configuration:config)}
     static var executable:URL? { ["/Applications/Ollama.app/Contents/Resources/ollama","/opt/homebrew/bin/ollama","/usr/local/bin/ollama"].first{FileManager.default.isExecutableFile(atPath:$0)}.map{URL(fileURLWithPath:$0)} }
+    static let qwenModels:Set<String>=["qwen3.8:27b","qwen3.8-uncensored:27b"]
+    static func supports(_ model:String)->Bool{model.lowercased().contains("gemma") || qwenModels.contains(model)}
+    static var sharedHelper:URL?{let path=FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/qwen-local-service");return FileManager.default.isExecutableFile(atPath:path.path) ? path:nil}
     func discover(_ done:@escaping(URL?,[String])->Void){
         func attempt(_ ports:[Int]) {
             guard let port=ports.first else{done(nil,[]);return}
             let base=URL(string:"http://127.0.0.1:\(port)")!;var request=URLRequest(url:base.appendingPathComponent("api/tags"));request.timeoutInterval=2
             session.dataTask(with:request){data,response,_ in
                 if let response=response as? HTTPURLResponse,response.statusCode==200,let data=data,let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any],let models=row["models"] as? [[String:Any]] {
-                    let names=models.compactMap{$0["name"] as? String}.filter{$0.lowercased().contains("gemma")}.sorted();done(base,names)
+                    let names=models.compactMap{$0["name"] as? String}.filter{Self.supports($0)}.sorted();done(base,names)
                 }else{attempt(Array(ports.dropFirst()))}
             }.resume()
         }
@@ -434,27 +460,83 @@ final class LocalGemmaService {
             done((requests?["active"] as? Int ?? 0)>0)
         }.resume()
     }
+    // Acquire a lease only when Qwen is actually requested. The helper starts
+    // the shared service/router without loading weights and counts other apps.
+    private func acquireSharedLease(_ done:@escaping(String?)->Void){
+        leaseQueue.async{
+            guard !self.closing else{done("请求已取消");return}
+            if self.sharedLease?.isRunning==true && self.leaseReady{done(nil);return}
+            self.leaseWaiters.append(done)
+            if self.leaseWaiters.count>1{return}
+            if self.sharedLease?.isRunning==true{self.waitForLease(until:Date().addingTimeInterval(45));return}
+            guard let executable=Self.sharedHelper else{self.finishLease(nil);return}
+            let output=Pipe(),helper=Process();helper.executableURL=executable;helper.arguments=["--hold-parent",String(ProcessInfo.processInfo.processIdentifier)];helper.standardInput=FileHandle.nullDevice;helper.standardOutput=output;helper.standardError=FileHandle.nullDevice
+            self.closeLeaseOutput();self.leaseOutput=output.fileHandleForReading;self.leaseOutputBuffer=Data();self.leaseAnnounced=false
+            output.fileHandleForReading.readabilityHandler={handle in let bytes=handle.availableData;self.leaseQueue.async{
+                guard self.leaseOutput===handle else{return}
+                self.leaseOutputBuffer.append(bytes)
+                if String(data:self.leaseOutputBuffer,encoding:.utf8)?.contains("LOCAL_OLLAMA_READY")==true{self.leaseAnnounced=true;self.closeLeaseOutput()}
+                else if bytes.isEmpty || self.leaseOutputBuffer.count>4096{self.closeLeaseOutput()}
+            }}
+            do{try helper.run();self.sharedLease=helper;self.leaseReady=false}catch{self.closeLeaseOutput();self.finishLease("无法启动本地模型共享服务，请检查本机 Qwen 服务配置");return}
+            self.waitForLease(until:Date().addingTimeInterval(45))
+        }
+    }
+    private func closeLeaseOutput(){leaseOutput?.readabilityHandler=nil;try? leaseOutput?.close();leaseOutput=nil}
+    private func finishLease(_ error:String?){let callbacks=leaseWaiters;leaseWaiters=[];for callback in callbacks{callback(error)}}
+    private func waitForLease(until deadline:Date){
+        guard !closing,sharedLease?.isRunning==true else{finishLease(closing ? "请求已取消":"本地模型共享服务启动失败，请检查本机 Qwen 服务配置");return}
+        var request=URLRequest(url:URL(string:"http://127.0.0.1:11439/health")!);request.timeoutInterval=1
+        session.dataTask(with:request){data,response,_ in self.leaseQueue.async{
+            guard !self.closing,self.sharedLease?.isRunning==true else{self.finishLease(self.closing ? "请求已取消":"本地模型共享服务已退出");return}
+            let row=data.flatMap{try? JSONSerialization.jsonObject(with:$0) as? [String:Any]}
+            if self.leaseAnnounced,(response as? HTTPURLResponse)?.statusCode==200,row?["service"] as? String=="qwen-local-speed-router"{self.leaseReady=true;self.finishLease(nil)}
+            else if Date()>=deadline{self.finishLease("本地模型共享服务启动超时，请稍后重试")}
+            else{self.leaseQueue.asyncAfter(deadline:.now()+0.2){self.waitForLease(until:deadline)}}
+        }}.resume()
+    }
+    func shutdown(){
+        // Do not wait for cache flushing on the AppKit termination path.
+        // The standalone helper releases only this app's shared lease.
+        leaseQueue.sync{closing=true;if let helper=sharedLease,helper.isRunning{helper.terminate()};sharedLease=nil;leaseReady=false;closeLeaseOutput();finishLease("请求已取消")}
+    }
     func prepare(model:String?,done:@escaping(URL?,String?,String?)->Void){
+        if let model=model,!model.isEmpty,!Self.supports(model){done(nil,nil,"所选本地模型不受支持");return}
         func select(_ base:URL?,_ models:[String]){
             guard let base=base else{done(nil,nil,"本地 Ollama 服务未能启动，请打开 Ollama 后重试");return}
-            let selected=(model?.isEmpty==false ? model:nil) ?? models.first(where:{$0=="gemma4:31b-mlx"}) ?? models.first
-            guard let selected=selected,models.contains(selected) else{done(nil,nil,"未找到已安装的 Gemma 模型，请先在 Ollama 中安装 Gemma，并在 AI 设置中选择");return}
+            let selected=(model?.isEmpty==false ? model:nil) ?? models.first(where:{$0=="gemma4:31b-mlx"}) ?? models.first(where:{$0.lowercased().contains("gemma")})
+            guard let selected=selected,Self.supports(selected),models.contains(selected) else{done(nil,nil,"未找到所选本地模型，请先在 Ollama 中安装，并在 AI 设置中选择");return}
             if base.port==11439{self.otherModelBusy{busy in if busy{done(nil,nil,"另一个本地模型正在处理任务，请稍后重试。当前对话已保留")}else{done(base,selected,nil)}}}else{done(base,selected,nil)}
         }
-        discover{base,models in
+        func discoverOrStart(){self.discover{base,models in
             if base != nil{select(base,models);return}
-            guard let executable=Self.executable else{done(nil,nil,"尚未安装 Ollama，请先安装本地服务和 Gemma 模型");return}
+            guard let executable=Self.executable else{done(nil,nil,"尚未安装 Ollama，请先安装本地服务和所选模型");return}
             DispatchQueue.global(qos:.utility).async{
                 let server=Process();server.executableURL=executable;server.arguments=["serve"];server.standardOutput=FileHandle.nullDevice;server.standardError=FileHandle.nullDevice
                 do{try server.run();self.ownedServer=server}catch{done(nil,nil,"无法启动本地 Ollama 服务");return}
                 func wait(_ remaining:Int){self.discover{base,models in if base != nil || remaining==0{select(base,models)}else{DispatchQueue.global(qos:.utility).asyncAfter(deadline:.now()+0.3){wait(remaining-1)}}}}
                 wait(10)
             }
-        }
+        }}
+        if let model=model,Self.qwenModels.contains(model){acquireSharedLease{error in if let error=error{done(nil,nil,error)}else{discoverOrStart()}}}else{discoverOrStart()}
     }
 }
 func localGemmaRequest(base:URL,model:String,messages:[[String:Any]],tools:[[String:Any]]?=nil)throws->URLRequest{
-    guard base.scheme=="http",base.host=="127.0.0.1",[11434,11439].contains(base.port ?? 0),base.path.isEmpty,model.lowercased().contains("gemma") else{throw appError("本地模型地址无效")}
+    guard base.scheme=="http",base.host=="127.0.0.1",[11434,11439].contains(base.port ?? 0),base.path.isEmpty,base.user==nil,base.password==nil,base.query==nil,base.fragment==nil,LocalGemmaService.supports(model) else{throw appError("本地模型地址无效")}
+    if LocalGemmaService.qwenModels.contains(model){
+        let history=try messages.map{message -> [String:Any] in
+            var row=message
+            if let parts=message["content"] as? [[String:Any]]{for part in parts{
+                if part["type"] as? String=="text",part["text"] is String{continue}
+                guard part["type"] as? String=="image_url" else{throw appError("本地模型消息内容格式无效")}
+                guard let image=part["image_url"] as? [String:Any],let url=image["url"] as? String,url.hasPrefix("data:image/"),let comma=url.firstIndex(of:","),url[..<comma].hasSuffix(";base64"),let bytes=Data(base64Encoded:String(url[url.index(after:comma)...])),!bytes.isEmpty,bytes.count<=32*1024*1024 else{throw appError("本地模型只接收本机课件图片")}
+            }}
+            row.removeValue(forKey:"reasoning_content");return row
+        }
+        var body:[String:Any]=["model":model,"messages":history,"stream":true,"max_tokens":4096,"reasoning_effort":"none","stream_options":["include_usage":true]]
+        if let tools=tools,!tools.isEmpty{body["tools"]=tools}
+        var request=URLRequest(url:base.appendingPathComponent("v1/chat/completions"));request.httpMethod="POST";request.timeoutInterval=600;request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try JSONSerialization.data(withJSONObject:body);return request
+    }
     var toolNames=[String:String]()
     for message in messages{for call in message["tool_calls"] as? [[String:Any]] ?? []{if let id=call["id"] as? String,let fn=call["function"] as? [String:Any],let name=fn["name"] as? String{toolNames[id]=name}}}
     let converted=try messages.map{message -> [String:Any] in
@@ -477,7 +559,7 @@ func localGemmaRequest(base:URL,model:String,messages:[[String:Any]],tools:[[Str
     var request=URLRequest(url:base.appendingPathComponent("api/chat"));request.httpMethod="POST";request.timeoutInterval=600;request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try JSONSerialization.data(withJSONObject:body);return request
 }
 
-final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate, URLSessionTaskDelegate, WKUIDelegate, NSToolbarDelegate, NSMenuItemValidation {
+final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate, NSWindowDelegate, URLSessionTaskDelegate, WKUIDelegate, NSToolbarDelegate, NSMenuItemValidation, WKHTTPCookieStoreObserver {
     var window: NSWindow!, web: WKWebView!, login: NSWindow?, loginWeb: WKWebView?
     var listener: NWListener!, origin="", token=UUID().uuidString, account="guest", downloads=[String:Download](), requests=[String:URLSessionDataTask](), cancelledRequests=Set<String>(),pendingRequests=Set<String>()
     let fm=FileManager.default
@@ -490,8 +572,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var loggingOut=false, lastWebRecovery=Date.distantPast
     var sessionNeedsResume=false
     private var latestCookieSnapshot:Data?
+    private var sessionCookieObservationStarted=false
     private lazy var sessionVault=SessionVault(root:root.appendingPathComponent("Session",isDirectory:true))
     private var sessionProbeActive=false
+    private var automaticLoginAttempted=false
     private var loginCompletionPending=false,loginVisitedAuthentication=false
     private var cookieRestoreStarted=false,cookieRestoreComplete=false,cookieRestoreCallbacks=[()->Void](),credentialUIAllowed=false
     private var accountGeneration=UUID()
@@ -508,7 +592,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         }
         return self.credentialSlots.access(name,data,remove:remove,onError:onError)
     }
-    private lazy var serviceKeys=ServiceKeyStore(url:root.appendingPathComponent("service-keys.json"),earlier:root.appendingPathComponent("campus-services.json"),bundled:bundledCampusCredentials(Bundle.main.url(forResource:"CampusServices",withExtension:"json")))
+    private lazy var serviceKeys=ServiceKeyStore(url:root.appendingPathComponent("service-keys.json"))
     private lazy var credentialSlots:CredentialSlots={
         let bytes=Bundle.main.executableURL.flatMap{try? Data(contentsOf:$0,options:.mappedIfSafe)} ?? Data("unknown-build".utf8)
         let tag=SHA256.hash(data:bytes).prefix(12).map{String(format:"%02x",$0)}.joined()
@@ -534,7 +618,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var testKeychainOperation:KeychainMemoryCache.Backend?
     var testAIRequest:((URLRequest)->Void)?
     #endif
-    lazy var root: URL = { let path=fm.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("智云助手 Mac"); try? fm.createDirectory(at:path,withIntermediateDirectories:true); return path }()
+    lazy var root: URL = { let path=fm.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("智云助手 展示版"); try? fm.createDirectory(at:path,withIntermediateDirectories:true); return path }()
     var queue=DispatchQueue(label:"cn.suike.mac.http",qos:.userInitiated)
     lazy var network: URLSession = { let c=URLSessionConfiguration.ephemeral; c.timeoutIntervalForRequest=20; c.timeoutIntervalForResource=90; c.httpCookieStorage=nil; c.urlCache=nil; return URLSession(configuration:c,delegate:self,delegateQueue:nil) }()
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -543,7 +627,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         web=WKWebView(frame:.zero,configuration:config); web.navigationDelegate=self;web.uiDelegate=self
         window=NSWindow(contentRect:NSRect(x:0,y:0,width:1320,height:850),styleMask:[.titled,.closable,.miniaturizable,.resizable],backing:.buffered,defer:false)
         window.isReleasedWhenClosed=false; window.title="智云助手"; window.minSize=NSSize(width:640,height:480); window.contentView=web; window.delegate=self;window.setFrameAutosaveName("StudyMainWindow");if !window.setFrameUsingName("StudyMainWindow"){window.center()};installToolbar();installMouseDragMonitor();window.orderFront(nil)
-        applyTheme(selectedTheme,persist:false);applyAppearanceMode(selectedMode,persist:false);startServer();restoreCookies {}
+        applyTheme(selectedTheme,persist:false);applyAppearanceMode(selectedMode,persist:false);startServer();observeSessionCookies();prepareAutomaticLoginAfterRestart{self.restoreCookies{self.resumeOfficialSession(force:true){_ in}}}
     }
     func installMouseDragMonitor(){
         guard mouseDragMonitor==nil else{return}
@@ -581,7 +665,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     let appearanceModes=["system","light","dark"]
     var selectedMode:String {
-        let value=themeDefaults.string(forKey:"appearanceMode") ?? "system"
+        let value=themeDefaults.string(forKey:"appearanceMode") ?? "light"
         return appearanceModes.contains(value) ? value:"system"
     }
     /// "system" leaves the window appearance unset so WebKit keeps following macOS light/dark changes.
@@ -599,7 +683,13 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard themeIdentifiers.contains(theme) else{return}
         if persist{themeDefaults.set(theme,forKey:"appearanceTheme")}
         if let image=themeImage(theme){NSApp.applicationIconImage=image;themeBrandLabel?.attributedStringValue=brandText(image);themeBrandLabel?.sizeToFit()}
+        for item in mainToolbar?.items ?? []{(item.view as? NSButton)?.contentTintColor=toolbarTint(theme)}
         event("appearanceTheme",theme)
+    }
+    /// 晴空 tints the title-bar actions azure like the page; the other schemes keep the system colour.
+    func toolbarTint(_ theme:String)->NSColor?{
+        guard theme=="collage" else{return nil}
+        return NSColor(name:nil){$0.bestMatch(from:[.darkAqua,.aqua]) == .darkAqua ? NSColor(srgbRed:0.55,green:0.77,blue:1,alpha:1):NSColor(srgbRed:0.06,green:0.37,blue:0.88,alpha:1)}
     }
     func installToolbar(){
         guard let window=window else{return};let toolbar=NSToolbar(identifier:"StudyToolbar")
@@ -638,7 +728,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         // Every title-bar action carries one SF Symbol; none are left text-only.
         let symbols=["home":"house","agent":"text.bubble","theme":"paintpalette","privacy":"hand.raised","logout":"rectangle.portrait.and.arrow.right"]
         if let name=symbols[key],let image=NSImage(systemSymbolName:name,accessibilityDescription:nil){button.image=image;button.imagePosition = .imageLeading;button.imageHugsTitle=true;button.symbolConfiguration=NSImage.SymbolConfiguration(pointSize:12,weight:.regular)}
-        button.sizeToFit();button.frame.size.width+=6
+        button.contentTintColor=toolbarTint(selectedTheme);button.sizeToFit();button.frame.size.width+=6
         item.view=button;item.label=title;item.toolTip=title;return item
     }
     func updateToolbar(name:String,loggedIn:Bool){
@@ -650,7 +740,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     @objc func toolbarClicked(_ sender:NSButton){guard let action=sender.identifier?.rawValue,["home","agent","theme","privacy","logout"].contains(action) else{return};event("toolbarAction",action)}
     func setupMenu() {
         let menu=NSMenu(); let appItem=NSMenuItem(); menu.addItem(appItem); let am=NSMenu(); appItem.submenu=am
-        am.addItem(withTitle:"关于智云助手",action:#selector(about),keyEquivalent:""); am.addItem(.separator()); am.addItem(withTitle:"退出智云助手",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")
+        am.addItem(withTitle:"关于智云助手",action:#selector(about),keyEquivalent:""); am.addItem(.separator());
+        let remember=am.addItem(withTitle:"记住校园登录…",action:#selector(configureOfficialLoginMenu),keyEquivalent:"");remember.target=self
+        let forget=am.addItem(withTitle:"忘记校园登录",action:#selector(forgetOfficialLogin),keyEquivalent:"");forget.target=self
+        am.addItem(.separator()); am.addItem(withTitle:"退出智云助手",action:#selector(NSApplication.terminate(_:)),keyEquivalent:"q")
         let editItem=NSMenuItem(); menu.addItem(editItem); let edit=NSMenu(title:"编辑"); editItem.submenu=edit
         for (title,selector,key) in [("撤销","undo:","z"),("重做","redo:","Z"),("剪切","cut:","x"),("复制","copyContent:","c"),("粘贴","paste:","v"),("全选","selectAll:","a")] { let item=edit.addItem(withTitle:title,action:Selector(selector),keyEquivalent:key);if selector=="copyContent:"{item.target=self} }
         let viewItem=NSMenuItem(); menu.addItem(viewItem); let view=NSMenu(title:"窗口"); viewItem.submenu=view; view.addItem(withTitle:"全屏",action:#selector(NSWindow.toggleFullScreen(_:)),keyEquivalent:"f").keyEquivalentModifierMask=[.command,.control]; NSApp.mainMenu=menu
@@ -701,7 +794,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     func applicationDidBecomeActive(_ notification: Notification) { if web != nil { event("foreground",[:]) } }
     func applicationDidResignActive(_ notification: Notification) { if web != nil { event("background",[:]) } }
-    func applicationWillTerminate(_ notification: Notification) { if let monitor=mouseDragMonitor{NSEvent.removeMonitor(monitor)};sessionWeb?.stopLoading();sessionDeadline?.cancel(); downloads.values.forEach { $0.cancel() }; requests.values.forEach{$0.cancel()}; streams.values.forEach { $0.session.invalidateAndCancel() };ocrOperations.values.forEach{$0.invalidateAndCancel()};remoteTransfers.values.forEach{$0.cancel()}; listener?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) { if let monitor=mouseDragMonitor{NSEvent.removeMonitor(monitor)};sessionWeb?.stopLoading();sessionDeadline?.cancel(); downloads.values.forEach { $0.cancel() }; requests.values.forEach{$0.cancel()}; streams.values.forEach { $0.session.invalidateAndCancel() };remoteTransfers.values.forEach{$0.cancel()}; listener?.cancel();localGemma.shutdown() }
     func windowWillClose(_ notification: Notification) { if notification.object as? NSWindow === login { credentialUIAllowed=false;persistCookies();login=nil;loginWeb=nil } }
     func webView(_ view: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy)->Void) {
         guard let u=navigationAction.request.url else { decisionHandler(.cancel); return }
@@ -722,7 +815,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             if url.host=="classroom.zju.edu.cn",!url.path.lowercased().contains("login") {
                 verifyResumedSession(view,generation:generation)
             }else{
-                view.evaluateJavaScript("!!document.querySelector('input[type=password]')"){value,_ in if value as? Bool == true,self.sessionWeb === view,self.sessionGeneration==generation{self.finishSession(false,generation:generation)}}
+                view.evaluateJavaScript("!!document.querySelector('input[type=password]')"){value,_ in if value as? Bool == true,self.sessionWeb === view,self.sessionGeneration==generation{self.attemptRememberedOfficialLogin(view,generation:generation)}}
             }
             return
         }
@@ -733,7 +826,22 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
         }
     }
-    func verifyResumedSession(_ view:WKWebView,generation:UUID){
+    func verifyResumedSession(_ view:WKWebView,generation:UUID,attempt:Int=0){
+        guard sessionWeb === view,sessionGeneration==generation,!sessionProbeActive else{return}
+        view.configuration.websiteDataStore.httpCookieStore.getAllCookies{cookies in
+            guard self.sessionWeb === view,self.sessionGeneration==generation,!self.sessionProbeActive else{return}
+            if bearerNeedsRenewal(campusBearer(cookies)){
+                guard attempt<12 else{self.finishSession(false,generation:generation);return}
+                DispatchQueue.main.asyncAfter(deadline:.now()+0.25){self.verifyResumedSession(view,generation:generation,attempt:attempt+1)};return
+            }
+            let safe=cookies.filter{trustedCookieDomain($0.domain)}
+            self.installCookies(safe){
+                guard self.sessionWeb === view,self.sessionGeneration==generation else{return}
+                self.verifyResumedIdentity(view,generation:generation)
+            }
+        }
+    }
+    private func verifyResumedIdentity(_ view:WKWebView,generation:UUID){
         guard sessionWeb === view,sessionGeneration==generation,!sessionProbeActive else{return};sessionProbeActive=true
         let paths=["/userapi/v1/infosimple"]
         func probe(_ index:Int){
@@ -767,8 +875,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             }
         }
     }
-    func webView(_ view:WKWebView,didFail navigation:WKNavigation!,withError error:Error){if view === sessionWeb{diagnostic("Session navigation failed code "+String((error as NSError).code));finishSession(false,generation:sessionGeneration)}}
-    func webView(_ view:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error){if view === sessionWeb{diagnostic("Session provisional navigation failed code "+String((error as NSError).code));finishSession(false,generation:sessionGeneration)}}
+    func webView(_ view:WKWebView,didFail navigation:WKNavigation!,withError error:Error){if view === sessionWeb,(error as NSError).code != NSURLErrorCancelled{diagnostic("Session navigation failed code "+String((error as NSError).code));finishSession(false,generation:sessionGeneration)}}
+    func webView(_ view:WKWebView,didFailProvisionalNavigation navigation:WKNavigation!,withError error:Error){if view === sessionWeb,(error as NSError).code != NSURLErrorCancelled{diagnostic("Session provisional navigation failed code "+String((error as NSError).code));finishSession(false,generation:sessionGeneration)}}
     func webViewWebContentProcessDidTerminate(_ view:WKWebView){
         if view === web {
             guard Date().timeIntervalSince(lastWebRecovery)>15 else{event("webRecovery",["ready":false]);return}
@@ -852,7 +960,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func performLogout(_ id:String){
         loggingOut=true;accountGeneration=UUID();credentialUIAllowed=false;cancelledAI.formUnion(pendingAI);finishSession(false,generation:sessionGeneration);sessionNeedsResume=false;clearPreparedImages();updateToolbar(name:"",loggedIn:false)
         for operation in pendingRequests{cancelledRequests.insert(operation)};for operation in pendingDownloads.keys{cancelledDownloads.insert(operation)}
-        requests.values.forEach{$0.cancel()};requests.removeAll();downloads.values.forEach{$0.cancel()};streams.values.forEach{$0.session.invalidateAndCancel()};ocrOperations.values.forEach{$0.invalidateAndCancel()};login?.close()
+        requests.values.forEach{$0.cancel()};requests.removeAll();downloads.values.forEach{$0.cancel()};streams.values.forEach{$0.session.invalidateAndCancel()};login?.close()
         store.httpCookieStore.getAllCookies{cookies in
             let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
             group.notify(queue:.main){self.storageQueue.async{
@@ -860,6 +968,16 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 _=self.sessionKeychain(persistedSessionCredential,remove:true,onError:error);_=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil;self.sessionVault.remove();try? self.fm.removeItem(at:self.profileIdentityURL())
                 DispatchQueue.main.async{self.account="guest";self.reply(id,true)}
             }}
+        }
+    }
+    // Explicit sign-out prevents restoration in the current run. On the next
+    // launch, a saved credential explicitly enables a fresh official login.
+    func prepareAutomaticLoginAfterRestart(_ done:@escaping()->Void){
+        guard hasLogoutMarker() else{done();return}
+        storageQueue.async{
+            let available=self.sessionKeychain(officialLoginCredential).flatMap{try? JSONDecoder().decode(OfficialLoginCredentials.self,from:$0)}?.valid == true
+            if available{try? removeLogoutMarker(in:self.root)}
+            DispatchQueue.main.async{done()}
         }
     }
     func restoreCookies(_ done:@escaping()->Void){
@@ -870,15 +988,20 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             self.storageQueue.async{
                 let current=self.sessionVault.read() ?? self.sessionKeychain(persistedSessionCredential)
                 let data=current ?? (self.sessionKeychain("cookies") ?? Data())
-                // Existing WebKit cookies win, but restore missing session-only SSO
-                // cookies even when a classroom token already exists.
-                let saved=decodedCookies(data).filter{candidate in !existing.contains{$0.name==candidate.name && $0.domain==candidate.domain && $0.path==candidate.path}}
-                DispatchQueue.main.async{self.installCookies(saved){self.sessionNeedsResume=bearerNeedsRenewal(campusBearer(existing+saved));self.persistCookies{finish()}}}
+                let saved=cookiesToRestore(decodedCookies(data),over:existing)
+                DispatchQueue.main.async{self.installCookies(saved){self.store.httpCookieStore.getAllCookies{current in self.sessionNeedsResume=bearerNeedsRenewal(campusBearer(current));self.persistCookies{finish()}}}}
             }
         }
     }
     func restoreCookies(from data:Data,done:@escaping()->Void){
         let cookies=hasLogoutMarker() ? []:decodedCookies(data);sessionNeedsResume = bearerNeedsRenewal(campusBearer(cookies));installCookies(cookies){self.cookieRestoreComplete=true;done()}
+    }
+    func observeSessionCookies(){
+        guard !sessionCookieObservationStarted else{return};sessionCookieObservationStarted=true;store.httpCookieStore.add(self)
+    }
+    func cookiesDidChange(in cookieStore:WKHTTPCookieStore){
+        guard cookieStore === store.httpCookieStore,cookieRestoreComplete,!loggingOut,!hasLogoutMarker() else{return}
+        persistCookies()
     }
     func persistCookies(_ done:(()->Void)?=nil){
         #if NATIVE_CONTRACT_TESTS
@@ -916,19 +1039,76 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if !sessionCallbacks.isEmpty{sessionCallbacks.append(done);return}
         if !force && !sessionNeedsResume{done(true);return}
         if Date().timeIntervalSince(sessionLastAttempt)<15{done(false);return}
-        sessionCallbacks.append(done);sessionNeedsResume=false;sessionProbeActive=false;sessionLastAttempt=Date();let generation=UUID();sessionGeneration=generation
-        let timeout=DispatchWorkItem{self.finishSession(false,generation:generation)};sessionDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+10,execute:timeout)
+        sessionCallbacks.append(done);sessionNeedsResume=false;sessionProbeActive=false;automaticLoginAttempted=false;sessionLastAttempt=Date();let generation=UUID();sessionGeneration=generation
+        let timeout=DispatchWorkItem{self.finishSession(false,generation:generation)};sessionDeadline=timeout;DispatchQueue.main.asyncAfter(deadline:.now()+25,execute:timeout)
         #if NATIVE_CONTRACT_TESTS
         if let bootstrap=testSessionBootstrap{bootstrap{ready in self.finishSession(ready,generation:generation)};return}
         #endif
         let config=WKWebViewConfiguration();config.websiteDataStore=store;config.preferences.javaScriptCanOpenWindowsAutomatically=false
         let view=WKWebView(frame:NSRect(x:0,y:0,width:800,height:600),configuration:config);view.navigationDelegate=self;view.uiDelegate=self;sessionWeb=view
-        view.load(URLRequest(url:officialSessionURL,cachePolicy:.reloadIgnoringLocalCacheData,timeoutInterval:8))
+        view.load(URLRequest(url:officialSessionURL,cachePolicy:.reloadIgnoringLocalCacheData,timeoutInterval:20))
     }
     private func finishSession(_ ready:Bool,generation:UUID){
         guard sessionGeneration==generation,!sessionCallbacks.isEmpty else{return};sessionDeadline?.cancel();sessionDeadline=nil;sessionWeb?.stopLoading();sessionWeb?.navigationDelegate=nil;sessionWeb?.uiDelegate=nil;sessionWeb=nil
         let callbacks=sessionCallbacks;sessionCallbacks.removeAll();sessionNeedsResume = !ready
-        if ready{persistCookies()};callbacks.forEach{$0(ready && !loggingOut)}
+        let notify={callbacks.forEach{$0(ready && !self.loggingOut)}}
+        if ready{try? fm.removeItem(at:automaticLoginAttentionURL);persistCookies{notify()}}else{notify()}
+    }
+    private var automaticLoginAttentionURL:URL{root.appendingPathComponent("automatic-login-needs-attention")}
+    func saveOfficialLogin(_ credentials:OfficialLoginCredentials)throws{
+        guard credentials.valid else{throw appError("请填写有效的校园账号和密码")}
+        let data=try JSONEncoder().encode(credentials);var failure:OSStatus?
+        guard sessionKeychain(officialLoginCredential,data,onError:{failure=$0}) != nil else{throw appError("未能保存到系统钥匙串，请在稍后主动重试",code:Int(failure ?? errSecIO))}
+        try? fm.removeItem(at:automaticLoginAttentionURL);try removeLogoutMarker(in:root);loggingOut=false;automaticLoginAttempted=false;sessionLastAttempt = .distantPast
+    }
+    @objc func forgetOfficialLogin(){
+        storageQueue.async{_ = self.sessionKeychain(officialLoginCredential,remove:true);try? self.fm.removeItem(at:self.automaticLoginAttentionURL)}
+    }
+    @objc func configureOfficialLoginMenu(){configureOfficialLogin{_ in}}
+    func configureOfficialLogin(done:@escaping(Bool)->Void){
+        // This native password sheet appears only from the explicit menu/setup action.
+        let alert=NSAlert();alert.messageText="记住校园登录";alert.informativeText="账号密码只保存在本机系统钥匙串，过期时仅填写到浙江大学官方认证页面。启动应用不弹出钥匙串权限框；验证码或二次验证仍需手动完成。";alert.addButton(withTitle:"保存");alert.addButton(withTitle:"取消")
+        let panel=NSView(frame:NSRect(x:0,y:0,width:390,height:112))
+        let username=NSTextField(frame:NSRect(x:0,y:76,width:390,height:24));username.placeholderString="浙江大学统一身份认证账号"
+        let password=NSSecureTextField(frame:NSRect(x:0,y:42,width:390,height:24));password.placeholderString="校园密码（不会显示或写入日志）"
+        let both=NSButton(checkboxWithTitle:"同时用于已安装的智云助手和智云高手",target:nil,action:nil);both.frame=NSRect(x:0,y:4,width:390,height:24);both.state = .on
+        panel.addSubview(username);panel.addSubview(password);panel.addSubview(both);alert.accessoryView=panel;alert.window.initialFirstResponder=username
+        guard alert.runModal() == .alertFirstButtonReturn else{done(false);return}
+        let saveBoth=both.state == .on
+        let credentials=OfficialLoginCredentials(username:username.stringValue.trimmingCharacters(in:.whitespacesAndNewlines),password:password.stringValue);username.stringValue="";password.stringValue=""
+        storageQueue.async{
+            do{try self.saveOfficialLogin(credentials)}catch{DispatchQueue.main.async{let message=NSAlert();message.messageText="未保存校园登录";message.informativeText=userError(error);message.runModal();done(false)};return}
+            if saveBoth{self.configureOtherOfficialLogin(credentials)}
+            DispatchQueue.main.async{self.restoreCookies{self.resumeOfficialSession(force:true){ready in self.event("login",["ready":ready]);print("SESSION_SETUP authenticated="+String(ready));fflush(stdout);done(true)}}}
+        }
+    }
+    private func configureOtherOfficialLogin(_ credentials:OfficialLoginCredentials){
+        let other=Bundle.main.bundleIdentifier=="cn.suike.gaos.mac" ? "智云助手":"智云高手",expected=other=="智云助手" ? "cn.suike.slides.mac":"cn.suike.gaos.mac",url=URL(fileURLWithPath:"/Applications/"+other+".app")
+        guard Bundle(url:url)?.bundleIdentifier==expected,let data=try? JSONEncoder().encode(credentials) else{return}
+        let task=Process(),input=Pipe(),output=Pipe();task.executableURL=url.appendingPathComponent("Contents/MacOS/Zhiyun");task.arguments=["--save-campus-login-stdin"];task.standardInput=input;task.standardOutput=output;task.standardError=FileHandle.nullDevice
+        do{try task.run();try input.fileHandleForWriting.write(contentsOf:data);try input.fileHandleForWriting.close();let result=output.fileHandleForReading.readDataToEndOfFile();task.waitUntilExit();print("SESSION_SETUP otherSaved="+String(task.terminationStatus==0)+" otherAuthenticated="+String(String(data:result,encoding:.utf8)?.contains("authenticated=true")==true));fflush(stdout)}catch{print("SESSION_SETUP otherSaved=false");fflush(stdout)}
+    }
+    private func attemptRememberedOfficialLogin(_ view:WKWebView,generation:UUID){
+        guard sessionWeb === view,sessionGeneration==generation,officialLoginPage(view.url),!automaticLoginAttempted,!fm.fileExists(atPath:automaticLoginAttentionURL.path),!hasLogoutMarker() else{finishSession(false,generation:generation);return}
+        automaticLoginAttempted=true
+        storageQueue.async{
+            let credentials=self.sessionKeychain(officialLoginCredential).flatMap{try? JSONDecoder().decode(OfficialLoginCredentials.self,from:$0)}
+            DispatchQueue.main.async{
+                guard self.sessionWeb === view,self.sessionGeneration==generation,!self.loggingOut,officialLoginPage(view.url) else{return}
+                guard let credentials,credentials.valid else{self.finishSession(false,generation:generation);return}
+                // A failed attempt is never looped at each launch. A successful
+                // official handshake clears this non-secret attention marker.
+                do{try Data("1".utf8).write(to:self.automaticLoginAttentionURL,options:.atomic)}catch{self.finishSession(false,generation:generation);return}
+                view.callAsyncJavaScript(officialLoginJavaScript,arguments:["username":credentials.username,"password":credentials.password],in:nil,in:.page){result in
+                    guard self.sessionWeb === view,self.sessionGeneration==generation else{return}
+                    if case .success(let value)=result,["submitted","already-submitted"].contains(value as? String ?? ""){return}
+                    // A navigation can destroy the JS context after submit. Let
+                    // its new page or the bounded deadline decide the outcome.
+                    if case .failure=result{return}
+                    self.finishSession(false,generation:generation)
+                }
+            }
+        }
     }
     func requiresSessionRecovery(_ done:@escaping(Bool)->Void){
         storageQueue.async{let protected=self.sessionVault.read()==nil && self.credentialCache.requiresAuthorization([persistedSessionCredential,"cookies"])
@@ -977,7 +1157,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         absorbCookies(response){self.cookieRequest(url,range:request.value(forHTTPHeaderField:"Range")){base in var next=base;next.httpMethod=request.httpMethod;next.httpBody=request.httpBody;if let value=request.value(forHTTPHeaderField:"Content-Type"){next.setValue(value,forHTTPHeaderField:"Content-Type")};completionHandler(next)}}
     }
     func scoped(_ category:String)->URL { root.appendingPathComponent(account).appendingPathComponent(category) }
-    func cacheCategory(_ key:String)->String {if key.hasPrefix("vision-"){return "vision"};if key.hasPrefix("summary-"){return "summary"};if key.hasPrefix("chats-"){return "question"};if key.hasPrefix("skip-"){return "skip"};if key.hasPrefix("lesson-") || key.hasPrefix("search-transcript-"){return "timeline"};return "schedule"}
+    func cacheCategory(_ key:String)->String {if key.hasPrefix("knowledge-"){return "knowledge"};if key.hasPrefix("vision-"){return "vision"};if key.hasPrefix("summary-"){return "summary"};if key.hasPrefix("chats-"){return "question"};if key.hasPrefix("skip-"){return "skip"};if key.hasPrefix("lesson-") || key.hasPrefix("search-transcript-"){return "timeline"};return "schedule"}
     func cacheSettings()->[String:Bool] {guard let data=try? Data(contentsOf:scoped("data").appendingPathComponent("cache-settings.json")),let value=try? JSONSerialization.jsonObject(with:data) as? [String:Bool] else{return [:]};return value}
     func safeKey(_ key:String)->Bool { !key.isEmpty && key.count<200 && key.range(of:"^[A-Za-z0-9_.-]+$",options:.regularExpression) != nil && !key.contains("..") }
     func diagnostic(_ text:String){let path=root.appendingPathComponent("diagnostics.log");var lines=((try? String(contentsOf:path,encoding:.utf8)) ?? "").components(separatedBy:"\n").suffix(30).map{String($0)};lines.append(text);try? lines.joined(separator:"\n").write(to:path,atomically:true,encoding:.utf8)}
@@ -988,6 +1168,13 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard message.webView === web,message.frameInfo.isMainFrame, message.frameInfo.request.url?.absoluteString.hasPrefix(origin+"/"+token+"/") == true, let args=message.body as? [String:Any], let id=args["id"] as? String, let action=args["action"] as? String else { return }
         let p=args["params"] as? [String:Any] ?? [:]
         switch action {
+        case "externalAgentStatus": reply(id,fm.fileExists(atPath:root.appendingPathComponent("ExternalAgent/enabled").path))
+        case "externalAgentEnable":
+            storageQueue.async{do{let folder=self.root.appendingPathComponent("ExternalAgent",isDirectory:true);try self.fm.createDirectory(at:folder,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700]);try self.fm.setAttributes([.posixPermissions:0o700],ofItemAtPath:folder.path);let marker=folder.appendingPathComponent("enabled");if p["enabled"] as? Bool == true{try Data().write(to:marker,options:.atomic);try self.fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:marker.path)}else{try? self.fm.removeItem(at:marker);for item in (try? self.fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil)) ?? [] where item.pathExtension == "request" || item.pathExtension == "response" {try? self.fm.removeItem(at:item)}};self.reply(id,true)}catch{self.reply(id,nil,"无法设置外部接口")}}
+        case "externalAgentNext":
+            storageQueue.async{let folder=self.root.appendingPathComponent("ExternalAgent",isDirectory:true);guard self.fm.fileExists(atPath:folder.appendingPathComponent("enabled").path) else{self.reply(id,nil);return};let files=(try? self.fm.contentsOfDirectory(at:folder,includingPropertiesForKeys:[.isRegularFileKey,.isSymbolicLinkKey,.fileSizeKey,.contentModificationDateKey])) ?? [];for file in files where file.pathExtension == "response" {if let date=(try? file.resourceValues(forKeys:[.contentModificationDateKey]))?.contentModificationDate,Date().timeIntervalSince(date)>120{try? self.fm.removeItem(at:file)}};for file in files.sorted(by:{$0.lastPathComponent<$1.lastPathComponent}) where file.lastPathComponent.range(of:"^[a-f0-9]{32}\\.request$",options:.regularExpression) != nil{let attrs=try? file.resourceValues(forKeys:[.isRegularFileKey,.isSymbolicLinkKey,.fileSizeKey,.contentModificationDateKey]);guard attrs?.isRegularFile==true,attrs?.isSymbolicLink != true,(attrs?.fileSize ?? 999999)<=262144,Date().timeIntervalSince(attrs?.contentModificationDate ?? .distantPast)<95,let data=try? Data(contentsOf:file),let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any],let identifier=row["id"] as? String,file.lastPathComponent==identifier+".request" else{try? self.fm.removeItem(at:file);continue};try? self.fm.removeItem(at:file);self.reply(id,row);return};self.reply(id,nil)}
+        case "externalAgentReply":
+            guard let identifier=p["id"] as? String,identifier.range(of:"^[a-f0-9]{32}$",options:.regularExpression) != nil else{reply(id,nil,"无效请求");return};storageQueue.async{do{let folder=self.root.appendingPathComponent("ExternalAgent",isDirectory:true);guard self.fm.fileExists(atPath:folder.appendingPathComponent("enabled").path) else{self.reply(id,false);return};let payload:[String:Any]=["result":p["result"] ?? NSNull(),"error":p["error"] ?? NSNull()];let bytes=try JSONSerialization.data(withJSONObject:payload);guard bytes.count<4*1024*1024 else{throw appError("响应过大")};let out=folder.appendingPathComponent(identifier+".response");try bytes.write(to:out,options:.atomic);try self.fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:out.path);self.reply(id,true)}catch{self.reply(id,nil,"接口响应失败")}}
         case "prepareImageDrag":
             guard let value=p["image"] as? String,value.utf8.count<=45*1024*1024 else{reply(id,nil,"拖动图片无效或过大");return}
             let name=p["name"] as? String ?? "课件.png",owner=account,generation=imagePreparationGeneration
@@ -1060,8 +1247,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         case "aiStatus":
             let owner=account,generation=accountGeneration
             storageQueue.async{
-                let personal=self.sessionKeychain(owner+"-deepseek")?.isEmpty==false,campus=self.sessionKeychain(campusGatewayCredential)?.isEmpty==false,required=self.credentialCache.requiresAuthorization([campusGatewayCredential]),ocr=self.sessionKeychain(campusOCRCredential)?.isEmpty==false
-                DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration else{self.reply(id,nil,"账号已切换");return};self.reply(id,["personalReady":personal,"campusReady":campus,"campusOCRReady":ocr,"campusAuthorizationRequired":required])}
+                let personal=self.sessionKeychain(owner+"-deepseek")?.isEmpty==false
+                DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration else{self.reply(id,nil,"账号已切换");return};self.reply(id,["personalReady":personal])}
             }
         case "recognizeSlide":
             guard let data=p["image"] as? String else{reply(id,nil,"缺少课件图片");return}
@@ -1072,14 +1259,9 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                     try VNImageRequestHandler(data:image.data,options:[:]).perform([request])
                     let rows=(request.results ?? []).sorted{a,b in abs(a.boundingBox.midY-b.boundingBox.midY)>0.015 ? a.boundingBox.midY>b.boundingBox.midY:a.boundingBox.minX<b.boundingBox.minX}
                     let text=rows.compactMap{$0.topCandidates(1).first?.string}.joined(separator:"\n")
-                    self.reply(id,["text":String(text.prefix(30000)),"method":"local-ocr","limitations":"校内模型不支持直接看图；以下为本机识别的文字，不包含可靠的图形关系分析。"])
+                    self.reply(id,["text":String(text.prefix(30000)),"method":"local-ocr","limitations":"以下为本机识别的文字，不包含可靠的图形关系分析。"])
                 }catch{self.reply(id,nil,"课件文字识别失败，请重试或切换支持图片的个人API")}
             }
-        case "campusOCR": startCampusOCR(id,p)
-        case "campusGateway", "campusOCRKey":
-            guard let key=p["key"] as? String,key.count>=16,key.count<=256,key.range(of:"^[A-Za-z0-9_-]+$",options:.regularExpression) != nil else{reply(id,nil,"校园网关密钥格式无效");return}
-            let credential=action=="campusOCRKey" ? campusOCRCredential:campusGatewayCredential
-            storageQueue.async{guard self.sessionKeychain(credential,Data(key.utf8),allowUI:true) != nil else{self.reply(id,nil,"无法保存校园服务密钥");return};self.reply(id,["ready":true])}
         case "secret":
             let name=account+"-deepseek",owner=account,generation=accountGeneration
             storageQueue.async{
@@ -1088,7 +1270,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 else{let text=String(data:self.sessionKeychain(name) ?? Data(),encoding:.utf8) ?? "";DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return};self.reply(id,text)}}
             }
         case "cache":
-            let cache=scoped("cache"),images=scoped("images"),settingsFile=scoped("data").appendingPathComponent("cache-settings.json"),known=["schedule","timeline","vision","summary","question","skip","images"]
+            let cache=scoped("cache"),images=scoped("images"),settingsFile=scoped("data").appendingPathComponent("cache-settings.json"),known=["schedule","timeline","vision","knowledge","summary","question","skip","images"]
             var settings=cacheSettings()
             if let category=p["category"] as? String,let enabled=p["enabled"] as? Bool {
                 guard known.contains(category) else{reply(id,nil,"缓存分类无效");return};settings[category]=enabled;let value=settings
@@ -1188,17 +1370,18 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 }
             }
         case "localAIStatus":
-            localGemma.discover{base,models in self.reply(id,["localReady":base != nil || LocalGemmaService.executable != nil,"localModels":models,"runningService":base != nil,"idleMinutes":5])}
+            localGemma.discover{base,models in self.reply(id,["localReady":base != nil || LocalGemmaService.executable != nil || LocalGemmaService.sharedHelper != nil,"localModels":models,"runningService":base != nil,"idleMinutes":5])}
         case "ai": startAI(id,p)
-        case "cancelAI": if let key=p["id"] as? String { if pendingAI.contains(key){cancelledAI.insert(key)};streams[key]?.session.invalidateAndCancel();ocrOperations[key]?.invalidateAndCancel() };reply(id,true)
+        case "cancelAI": if let key=p["id"] as? String { if pendingAI.contains(key){cancelledAI.insert(key)};streams[key]?.session.invalidateAndCancel(); };reply(id,true)
         default: reply(id,nil,"未知操作")
         }
     }
     func authorizeCredentials(_ id:String,purpose:String){
-        guard ["session","api","campus","campusOCR"].contains(purpose) else{reply(id,nil,"恢复目标无效");return};let owner=account,generation=accountGeneration
+        guard ["session","api"].contains(purpose) else{reply(id,nil,"恢复目标无效");return};let owner=account,generation=accountGeneration
+        if purpose=="session"{try? fm.removeItem(at:automaticLoginAttentionURL);sessionLastAttempt = .distantPast}
         storageQueue.async{
             if purpose != "session"{
-                let name=purpose=="campus" ? campusGatewayCredential:purpose=="campusOCR" ? campusOCRCredential:owner+"-deepseek",data=self.sessionKeychain(name,allowUI:true),required=self.credentialCache.requiresAuthorization([name])
+                let name=owner+"-deepseek",data=self.sessionKeychain(name,allowUI:true),required=self.credentialCache.requiresAuthorization([name])
                 DispatchQueue.main.async{guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return};self.reply(id,["ready":data?.isEmpty==false,"authorizationRequired":required])};return
             }
             DispatchQueue.main.async{
@@ -1224,10 +1407,10 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     func startAI(_ id:String,_ params:[String:Any]){
         guard let messages=params["messages"] as? [[String:Any]],messages.count<(params["purpose"] as? String=="agent" ? 300:100) else{reply(id,nil,"问答内容无效");return}
         let provider=params["provider"] as? String ?? "auto"
-        guard ["auto","personal","campus","local"].contains(provider) else{reply(id,nil,"AI来源无效");return}
+        guard ["auto","personal","local"].contains(provider) else{reply(id,nil,"AI来源无效");return}
         let owner=account,generation=accountGeneration;pendingAI.insert(id)
         if provider=="local" {
-            event("aiStatus",["id":id,"message":"正在准备本地 Gemma…"])
+            event("aiStatus",["id":id,"message":"正在准备本地模型…"])
             localGemma.prepare(model:params["localModel"] as? String){base,model,error in DispatchQueue.main.async {
                 self.pendingAI.remove(id);guard !self.loggingOut,owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil else{self.reply(id,nil,"请求已取消");return}
                 guard let base=base,let model=model else{self.reply(id,nil,error ?? "本地模型不可用");return}
@@ -1236,56 +1419,32 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                     #if NATIVE_CONTRACT_TESTS
                     if let probe=self.testAIRequest{probe(request);self.reply(id,["answer":"synthetic","calls":[]]);return}
                     #endif
-                    let stream=AIStream(request,event:{text in self.event("ai",["id":id,"delta":text])},done:{value,error in DispatchQueue.main.async{self.streams.removeValue(forKey:id);self.reply(id,value,error.map{"本地 Gemma："+$0})}});self.streams[id]=stream
+                    let stream=AIStream(request,event:{text in self.event("ai",["id":id,"delta":text])},done:{value,error in DispatchQueue.main.async{self.streams.removeValue(forKey:id);self.reply(id,value,error.map{"本地模型："+$0})}});self.streams[id]=stream
                 }catch{self.reply(id,nil,userError(error))}
             }}
             return
         }
         storageQueue.async{
-            let personal=provider=="campus" ? "":String(data:self.sessionKeychain(owner+"-deepseek") ?? Data(),encoding:.utf8) ?? ""
-            let campus=provider=="campus" || provider=="auto" && personal.isEmpty
-            let name=campus ? campusGatewayCredential:owner+"-deepseek",key=campus ? String(data:self.sessionKeychain(name) ?? Data(),encoding:.utf8) ?? "":personal,required=self.credentialCache.requiresAuthorization([name])
+            let name=owner+"-deepseek",key=String(data:self.sessionKeychain(name) ?? Data(),encoding:.utf8) ?? "",required=self.credentialCache.requiresAuthorization([name])
             DispatchQueue.main.async{
                 self.pendingAI.remove(id);guard !self.loggingOut,owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil else{self.reply(id,nil,"请求已取消");return}
-                guard !key.isEmpty else{self.reply(id,nil,required ? "旧版本密钥无法静默读取，请在API设置中重新配置":campus ? "本机尚未预置校园网关密钥，可在API设置中接入个人API":"请先设置 DeepSeek API 密钥");return}
-                var options=params;options["provider"]=campus ? "campus":"personal"
-                self.startAIWithKey(id,params:options,messages:messages,key:key)
-            }
-        }
-    }
-    var ocrOperations=[String:URLSession]()
-    func startCampusOCR(_ id:String,_ params:[String:Any]){
-        guard let image=params["image"] as? String,let decoded=try? decodedNoteImage(image) else{reply(id,nil,"OCR图片无效");return}
-        let owner=account,generation=accountGeneration;pendingAI.insert(id)
-        storageQueue.async{
-            let key=String(data:self.sessionKeychain(campusOCRCredential) ?? Data(),encoding:.utf8) ?? ""
-            DispatchQueue.main.async{
-                self.pendingAI.remove(id);guard owner==self.account,generation==self.accountGeneration,self.cancelledAI.remove(id)==nil,!self.loggingOut else{self.reply(id,nil,"OCR已取消");return}
-                guard !key.isEmpty else{self.reply(id,nil,"本机校园OCR尚未配置或旧密钥无法静默读取，请在应用内重新配置");return}
-                var request=URLRequest(url:URL(string:campusOCREndpoint)!);request.httpMethod="POST";request.setValue("Bearer "+key,forHTTPHeaderField:"Authorization");request.setValue("application/json",forHTTPHeaderField:"Content-Type");request.httpBody=try? JSONSerialization.data(withJSONObject:["file":decoded.data.base64EncodedString(),"fileType":1])
-                let config=URLSessionConfiguration.ephemeral;config.httpCookieStorage=nil;config.urlCache=nil;config.timeoutIntervalForRequest=25;config.timeoutIntervalForResource=45
-                let session=URLSession(configuration:config);self.ocrOperations[id]=session
-                session.dataTask(with:request){data,response,error in
-                    session.finishTasksAndInvalidate()
-                    let text:Result<String,Error>=Result{guard error==nil,(response as? HTTPURLResponse)?.statusCode==200,let data=data else{throw appError("校园OCR暂时不可用，将尝试本机识别")};return try campusLayoutText(data)}
-                    DispatchQueue.main.async{self.ocrOperations.removeValue(forKey:id);guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"账号已切换");return};switch text{case .success(let text):self.reply(id,["text":text,"method":"campus-layout-ocr"]);case .failure(let error):self.reply(id,nil,userError(error))}}
-                }.resume()
+                guard !key.isEmpty else{self.reply(id,nil,required ? "旧版本密钥无法静默读取，请在API设置中重新配置":"请先设置 DeepSeek API 密钥");return}
+                self.startAIWithKey(id,params:params,messages:messages,key:key)
             }
         }
     }
     private func startAIWithKey(_ id:String,params:[String:Any],messages:[[String:Any]],key:String){
         let hasImages=messages.contains{message in (message["content"] as? [[String:Any]])?.contains{part in part["type"] as? String=="image_url"} == true}
-        let campus=params["provider"] as? String=="campus"
-        guard let model=campus ? campusGatewayModel:resolvedDeepSeekModel(params["model"] as? String ?? "deepseek-flash",hasImages:hasImages) else{reply(id,nil,"模型不支持");return}
-        var req=URLRequest(url:URL(string:campus ? campusGatewayEndpoint:"https://api.deepseek.com/chat/completions")!); req.httpMethod="POST"; req.setValue("Bearer "+key,forHTTPHeaderField:"Authorization"); req.setValue("application/json",forHTTPHeaderField:"Content-Type"); let agent=params["purpose"] as? String=="agent"
+        guard let model=resolvedDeepSeekModel(params["model"] as? String ?? "deepseek-flash",hasImages:hasImages) else{reply(id,nil,"模型不支持");return}
+        var req=URLRequest(url:URL(string:"https://api.deepseek.com/chat/completions")!); req.httpMethod="POST"; req.setValue("Bearer "+key,forHTTPHeaderField:"Authorization"); req.setValue("application/json",forHTTPHeaderField:"Content-Type"); let agent=params["purpose"] as? String=="agent"
         let effort=params["reasoning_effort"] as? String ?? "high"
         guard ["low","high","max"].contains(effort) else{reply(id,nil,"思考强度无效");return}
-        var body:[String:Any]=["model":model,"messages":messages,"stream":true,"max_tokens":agent ? (campus ? 8192:16384):4096,"stream_options":["include_usage":true]]
-        if !campus{body["thinking"]=["type":agent ? "enabled":"disabled"];if agent{body["reasoning_effort"]=effort}};if let tools=params["tools"] as? [[String:Any]],tools.count<=4 {body["tools"]=tools};req.httpBody=try? JSONSerialization.data(withJSONObject:body)
+        var body:[String:Any]=["model":model,"messages":messages,"stream":true,"max_tokens":agent ? 16384:4096,"stream_options":["include_usage":true]]
+        body["thinking"]=["type":agent ? "enabled":"disabled"];if agent{body["reasoning_effort"]=effort};if let tools=params["tools"] as? [[String:Any]],tools.count<=4 {body["tools"]=tools};req.httpBody=try? JSONSerialization.data(withJSONObject:body)
         #if NATIVE_CONTRACT_TESTS
         if let probe=testAIRequest{probe(req);reply(id,["answer":"synthetic","calls":[]]);return}
         #endif
-        let stream=AIStream(req,event:{ value in self.event("ai",["id":id,"delta":value]) },done:{ value,error in DispatchQueue.main.async { self.streams.removeValue(forKey:id); self.reply(id,value,error.map{campus ? "校园网关："+$0+"。仅在浙大内网环境下可用":$0}) } }); streams[id]=stream
+        let stream=AIStream(req,event:{ value in self.event("ai",["id":id,"delta":value]) },done:{ value,error in DispatchQueue.main.async { self.streams.removeValue(forKey:id); self.reply(id,value,error) } }); streams[id]=stream
     }
     var streams=[String:AIStream]()
     private let localGemma=LocalGemmaService()
@@ -1492,4 +1651,18 @@ final class AIStream:NSObject,URLSessionDataDelegate {
 }
 
 let application=NSApplication.shared
-let delegate=App();application.delegate=delegate;application.run()
+let delegate=App()
+if CommandLine.arguments.contains("--configure-campus-login"){
+    application.setActivationPolicy(.accessory)
+    DispatchQueue.main.async{application.activate(ignoringOtherApps:true);delegate.observeSessionCookies();delegate.configureOfficialLogin{saved in exit(saved ? 0:1)}}
+}else if CommandLine.arguments.contains("--check-campus-session"){
+    application.setActivationPolicy(.prohibited)
+    DispatchQueue.main.async{delegate.observeSessionCookies();delegate.prepareAutomaticLoginAfterRestart{delegate.restoreCookies{delegate.resumeOfficialSession(force:true){ready in print("SESSION_CHECK authenticated="+String(ready));fflush(stdout);exit(ready ? 0:2)}}}}
+}else if CommandLine.arguments.contains("--save-campus-login-stdin"){
+    application.setActivationPolicy(.prohibited)
+    let data=FileHandle.standardInput.readDataToEndOfFile()
+    guard data.count<=8192,let credentials=try? JSONDecoder().decode(OfficialLoginCredentials.self,from:data) else{exit(1)}
+    var saved=false;delegate.storageQueue.sync{saved=(try? delegate.saveOfficialLogin(credentials)) != nil};guard saved else{exit(1)}
+    DispatchQueue.main.async{delegate.observeSessionCookies();delegate.restoreCookies{delegate.resumeOfficialSession(force:true){ready in print("SESSION_SETUP authenticated="+String(ready));fflush(stdout);exit(0)}}}
+}else{application.delegate=delegate}
+application.run()
