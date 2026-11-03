@@ -21,7 +21,7 @@ func withKeychainInteractionPolicy<T>(allowUI:Bool,get:()throws->Bool,set:(Bool)
     let prior=try get();defer{if prior{try? set(prior)}};if prior{try set(false)};return try operation()
 }
 func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
-    do{return try withKeychainInteractionPolicy(allowUI:false,get:{
+    do{return try withKeychainInteractionPolicy(allowUI:allowUI,get:{
         var allowed=DarwinBoolean(false);let status=SecKeychainGetUserInteractionAllowed(&allowed);guard status==errSecSuccess else{throw appError("钥匙串策略不可读",code:Int(status))};return allowed.boolValue
     },set:{allowed in
         let status=SecKeychainSetUserInteractionAllowed(allowed);guard status==errSecSuccess else{throw appError("钥匙串交互策略不可设置",code:Int(status))}
@@ -38,7 +38,7 @@ func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=fals
             }
             guard status==errSecSuccess else{onError?(status);return nil};return data
         }
-        var lookup=query;lookup[kSecUseAuthenticationUI as String]=kSecUseAuthenticationUIFail;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne
+        var lookup=query;lookup[kSecUseAuthenticationUI as String]=allowUI ? kSecUseAuthenticationUIAllow : kSecUseAuthenticationUIFail;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne
         var output:CFTypeRef?;let status=SecItemCopyMatching(lookup as CFDictionary,&output)
         guard status==errSecSuccess else{if status != errSecItemNotFound{onError?(status)};return nil};return output as? Data
     })}catch{onError?(OSStatus((error as NSError).code));return nil}
@@ -46,7 +46,7 @@ func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=fals
 // A new ad-hoc build must not update an old build's ACL-protected item. Keep
 // secrets in Keychain; this owner-only index contains item names, never values.
 final class CredentialSlots {
-    typealias Backend=(String,Data?,Bool,@escaping(OSStatus)->Void)->Data?
+    typealias Backend=(String,Data?,Bool,Bool,@escaping(OSStatus)->Void)->Data?
     private let indexURL:URL,tag:String,backend:Backend
     init(indexURL:URL,tag:String,backend:@escaping Backend){self.indexURL=indexURL;self.tag=tag;self.backend=backend}
     private func index()->[String:String]{guard let data=try? Data(contentsOf:indexURL),data.count<256*1024 else{return [:]};return (try? JSONDecoder().decode([String:String].self,from:data)) ?? [:]}
@@ -56,15 +56,15 @@ final class CredentialSlots {
         try JSONEncoder().encode(rows).write(to:indexURL,options:.atomic)
         try FileManager.default.setAttributes([.posixPermissions:0o600],ofItemAtPath:indexURL.path)
     }
-    func access(_ name:String,_ data:Data?,remove:Bool,onError:@escaping(OSStatus)->Void)->Data?{
+    func access(_ name:String,_ data:Data?,remove:Bool,allowUI:Bool=false,onError:@escaping(OSStatus)->Void)->Data?{
         let slot=name+"-app-"+tag,previous=index()[name]
         if remove{
             // Tombstone first: an inaccessible legacy item must never reappear.
             do{try record(name,"")}catch{onError(errSecIO);return nil}
-            _ = backend(slot,nil,true){onError($0)};return nil
+            _ = backend(slot,nil,true,allowUI){onError($0)};return nil
         }
         if let data=data{
-            guard let stored=backend(slot,data,false,onError) else{return nil}
+            guard let stored=backend(slot,data,false,allowUI,onError) else{return nil}
             do{try record(name,slot)}catch{onError(errSecIO);return nil};return stored
         }
         if previous==""{return nil}
@@ -73,10 +73,10 @@ final class CredentialSlots {
         if let previous=previous,previous.hasPrefix(name+"-app-"),previous != slot{candidates.append(previous)}
         candidates.append(name)
         for candidate in candidates{
-            if let stored=backend(candidate,nil,false,{failure=$0}){
+            if let stored=backend(candidate,nil,false,allowUI,{failure=$0}){
                 if candidate != slot{
                     // Migration is optional and silent; never replace the source.
-                    if backend(slot,stored,false,{_ in}) != nil{try? record(name,slot)}
+                    if backend(slot,stored,false,allowUI,{_ in}) != nil{try? record(name,slot)}
                 }
                 return stored
             }
@@ -85,43 +85,37 @@ final class CredentialSlots {
     }
 }
 
-/// AI service keys must outlive app updates. An ad-hoc rebuild can never silently read a Keychain
-/// item another build created: the item's partition rejects it even with an open access list, and
-/// this app never prompts. Each
-/// account's personal DeepSeek key live in an owner-only file in the app's data folder; the course
-/// session and account identity stay in Keychain. A key an earlier build stored and this build can
-/// still read moves into the file once.
+// Personal AI keys use the system Keychain. A legacy plaintext key is removed
+// only after a successful Keychain write and readback. Fail closed on failure.
 func fileStoredCredential(_ name:String)->Bool{name.hasSuffix("-deepseek")}
 final class ServiceKeyStore {
     typealias Legacy=(Data?,Bool)->Data?
     let url:URL,earlier:URL?,bundled:[String:String]
     init(url:URL,earlier:URL?=nil,bundled:[String:String]=[:]){self.url=url;self.earlier=earlier;self.bundled=bundled}
     private func read(_ file:URL)->[String:String]?{guard let data=try? Data(contentsOf:file),data.count<64*1024 else{return nil};return try? JSONDecoder().decode([String:String].self,from:data)}
-    private func rows()->[String:String]{
-        if let rows=read(url){return rows}
-        guard let earlier,let rows=read(earlier) else{return [:]}
-        if (try? save(rows)) != nil{try? FileManager.default.removeItem(at:earlier)}
-        return rows
-    }
     private func save(_ rows:[String:String])throws{
         let fm=FileManager.default,folder=url.deletingLastPathComponent();try fm.createDirectory(at:folder,withIntermediateDirectories:true)
+        if rows.isEmpty { if fm.fileExists(atPath:url.path){try fm.removeItem(at:url)};return }
         let data=try JSONEncoder().encode(rows),temp=folder.appendingPathComponent("."+url.lastPathComponent+"."+UUID().uuidString)
-        // Owner-only from creation, then an atomic rename: the file is never readable by others.
         let fd=open(temp.path,O_WRONLY|O_CREAT|O_EXCL,0o600);guard fd>=0 else{throw appError("无法保存密钥")}
         let written=data.withUnsafeBytes{bytes in Darwin.write(fd,bytes.baseAddress,bytes.count)==bytes.count};close(fd)
         guard written,rename(temp.path,url.path)==0 else{try? fm.removeItem(at:temp);throw appError("无法保存密钥")}
     }
     func access(_ name:String,_ data:Data?,remove:Bool,onError:@escaping(OSStatus)->Void,legacy:Legacy)->Data?{
-        var rows=self.rows()
-        if remove{rows.removeValue(forKey:name);do{try save(rows)}catch{onError(errSecIO)};_=legacy(nil,true);return nil}
-        if let data=data{
-            guard let text=String(data:data,encoding:.utf8) else{onError(errSecParam);return nil}
-            rows[name]=text;do{try save(rows)}catch{onError(errSecIO);return nil};return data
+        var rows=read(url) ?? [:]
+        if remove{
+            _=legacy(nil,true)
+            rows.removeValue(forKey:name);do{try save(rows)}catch{onError(errSecIO)}
+            return nil
         }
-        if let text=rows[name]{return Data(text.utf8)}
-        guard let stored=legacy(nil,false) else{return nil}
-        if let text=String(data:stored,encoding:.utf8){rows[name]=text;try? save(rows)}
-        return stored
+        if let data=data{
+            guard legacy(data,false) != nil,legacy(nil,false)==data else{onError(errSecAuthFailed);return nil}
+            rows.removeValue(forKey:name);do{try save(rows)}catch{onError(errSecIO);return nil};return data
+        }
+        if let secured=legacy(nil,false){return secured}
+        guard let text=rows[name] ?? earlier.flatMap({read($0)?[name]}),let old=text.data(using:.utf8) else{return nil}
+        guard legacy(old,false) != nil,legacy(nil,false)==old else{onError(errSecAuthFailed);return nil}
+        rows.removeValue(forKey:name);do{try save(rows)}catch{onError(errSecIO);return nil};return old
     }
 }
 
@@ -274,13 +268,32 @@ document.documentElement.dataset.zhiyunAutoSubmitted = 'true';
 const remember = form.querySelector('input#rember[name=rememberMe]'); if (remember) remember.checked = true;
 button.click(); return 'submitted';
 """#
-// Ad-hoc app updates have different Keychain partitions. Keep an encrypted,
-// owner-only session snapshot independent of the executable signature. No campus
-// password is stored. Legacy Keychain snapshots are imported silently once.
+// Keep the encrypted session snapshot on disk and its encryption key in the
+// system Keychain. A legacy file key is retained until protected storage has
+// been verified. Ad-hoc updates may require explicit system authorization.
 final class SessionVault {
+    typealias KeyStore=(Data?,Bool)->Data?
     let root:URL
-    init(root:URL){self.root=root}
+    private let keyStore:KeyStore?
+    init(root:URL,keyStore:KeyStore?=nil){self.root=root;self.keyStore=keyStore}
     private var keyURL:URL{root.appendingPathComponent("session-key.bin")}
+    private func key(create:Bool)throws->Data?{
+        guard let store=keyStore else{
+            if let old=try? Data(contentsOf:keyURL),old.count==32{return old}
+            guard create else{return nil}
+            let value=SymmetricKey(size:.bits256).withUnsafeBytes{Data($0)};try write(value,to:keyURL);return value
+        }
+        if let secured=store(nil,false),secured.count==32{return secured}
+        if let old=try? Data(contentsOf:keyURL),old.count==32{
+            if store(old,false)==old,store(nil,false)==old{try? FileManager.default.removeItem(at:keyURL)}
+            return old // Preserve a readable legacy session if authorization was denied.
+        }
+        guard create else{return nil}
+        guard !FileManager.default.fileExists(atPath:dataURL.path) else{throw appError("登录会话暂时无法解锁，请允许系统授权或重新登录")}
+        let value=SymmetricKey(size:.bits256).withUnsafeBytes{Data($0)}
+        guard store(value,false)==value,store(nil,false)==value else{throw appError("无法安全保存登录会话，请重新登录或允许系统授权")}
+        return value
+    }
     private var dataURL:URL{root.appendingPathComponent("session.sealed")}
     private func write(_ data:Data,to url:URL)throws {
         try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
@@ -291,17 +304,15 @@ final class SessionVault {
         guard written,rename(temp.path,url.path)==0 else{throw appError("无法保存登录会话")}
     }
     func read()->Data? {
-        guard let key=try? Data(contentsOf:keyURL),key.count==32,let data=try? Data(contentsOf:dataURL),data.count<=3*1024*1024,let box=try? AES.GCM.SealedBox(combined:data) else{return nil}
+        guard let key=try? key(create:false),key.count==32,let data=try? Data(contentsOf:dataURL),data.count<=3*1024*1024,let box=try? AES.GCM.SealedBox(combined:data) else{return nil}
         return try? AES.GCM.open(box,using:SymmetricKey(data:key))
     }
     func save(_ data:Data)throws {
         guard data.count<=2*1024*1024 else{throw appError("会话数据过大")}
-        let bytes:Data
-        if let existing=try? Data(contentsOf:keyURL),existing.count==32{bytes=existing}
-        else{bytes=SymmetricKey(size:.bits256).withUnsafeBytes{Data($0)};try write(bytes,to:keyURL)}
+        guard let bytes=try key(create:true) else{throw appError("无法安全保存登录会话")}
         let box=try AES.GCM.seal(data,using:SymmetricKey(data:bytes));guard let combined=box.combined else{throw appError("无法保存登录会话")};try write(combined,to:dataURL)
     }
-    func remove(){try? FileManager.default.removeItem(at:dataURL);try? FileManager.default.removeItem(at:keyURL)}
+    func remove(){try? FileManager.default.removeItem(at:dataURL);try? FileManager.default.removeItem(at:keyURL);_ = keyStore?(nil,true)}
 }
 func requestedByteRange(_ value:String?,size:Int)throws->(start:Int,end:Int,partial:Bool){
     guard size>=0 else{throw appError("文件大小无效")};guard let value=value else{return (0,max(0,size-1),false)}
@@ -573,31 +584,37 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     var sessionNeedsResume=false
     private var latestCookieSnapshot:Data?
     private var sessionCookieObservationStarted=false
-    private lazy var sessionVault=SessionVault(root:root.appendingPathComponent("Session",isDirectory:true))
+    private lazy var sessionVault:SessionVault={
+        #if NATIVE_CONTRACT_TESTS
+        if testKeychainOperation != nil || testSessionKeychain != nil{return SessionVault(root:root.appendingPathComponent("Session",isDirectory:true))}
+        #endif
+        return SessionVault(root:root.appendingPathComponent("Session",isDirectory:true)){[unowned self] value,remove in
+            self.credentialSlots.access("session-vault-key",value,remove:remove,onError:{_ in})
+        }
+    }()
     private var sessionProbeActive=false
     private var automaticLoginAttempted=false
     private var loginCompletionPending=false,loginVisitedAuthentication=false
     private var cookieRestoreStarted=false,cookieRestoreComplete=false,cookieRestoreCallbacks=[()->Void](),credentialUIAllowed=false
     private var accountGeneration=UUID()
     private var pendingAI=Set<String>(),cancelledAI=Set<String>()
-    // Legacy allowUI arguments only bypass a cached failure. Actual Keychain
-    // access is ALWAYS noninteractive, including explicit save/recovery routes.
+    // Automatic reads stay silent; explicit recovery can request system authorization.
     lazy var credentialCache=KeychainMemoryCache{[unowned self] name,data,remove,allowUI,onError in
         #if NATIVE_CONTRACT_TESTS
-        if let operation=self.testKeychainOperation{return operation(name,data,remove,false,onError)}
+        if let operation=self.testKeychainOperation{return operation(name,data,remove,allowUI,onError)}
         if let storage=self.testSessionKeychain{return storage(name,data,remove)}
         #endif
         if fileStoredCredential(name){
-            return self.serviceKeys.access(name,data,remove:remove,onError:onError){value,remove in self.credentialSlots.access(name,value,remove:remove,onError:onError)}
+            return self.serviceKeys.access(name,data,remove:remove,onError:onError){value,remove in self.credentialSlots.access(name,value,remove:remove,allowUI:allowUI,onError:onError)}
         }
-        return self.credentialSlots.access(name,data,remove:remove,onError:onError)
+        return self.credentialSlots.access(name,data,remove:remove,allowUI:allowUI,onError:onError)
     }
     private lazy var serviceKeys=ServiceKeyStore(url:root.appendingPathComponent("service-keys.json"))
     private lazy var credentialSlots:CredentialSlots={
         let bytes=Bundle.main.executableURL.flatMap{try? Data(contentsOf:$0,options:.mappedIfSafe)} ?? Data("unknown-build".utf8)
         let tag=SHA256.hash(data:bytes).prefix(12).map{String(format:"%02x",$0)}.joined()
-        return CredentialSlots(indexURL:root.appendingPathComponent("credential-slots.json"),tag:tag){name,data,remove,onError in
-            keychain(name,data,remove:remove,allowUI:false,onError:onError)
+        return CredentialSlots(indexURL:root.appendingPathComponent("credential-slots.json"),tag:tag){name,data,remove,allowUI,onError in
+            keychain(name,data,remove:remove,allowUI:allowUI,onError:onError)
         }
     }()
     private var sessionWeb:WKWebView?,sessionCallbacks=[(Bool)->Void](),sessionDeadline:DispatchWorkItem?,sessionLastAttempt=Date.distantPast,sessionGeneration=UUID()
@@ -1387,6 +1404,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
             DispatchQueue.main.async{
                 guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}
                 self.storageQueue.async{
+                    if !self.hasLogoutMarker(){_ = self.sessionKeychain(officialLoginCredential,allowUI:true);_ = self.credentialSlots.access("session-vault-key",nil,remove:false,allowUI:true,onError:{_ in})}
                     let data=self.hasLogoutMarker() ? nil:(self.sessionVault.read() ?? self.sessionKeychain(persistedSessionCredential,allowUI:true))
                     DispatchQueue.main.async{
                         guard owner==self.account,generation==self.accountGeneration,!self.loggingOut else{self.reply(id,nil,"请求已取消");return}

@@ -88,9 +88,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(!jsonFiles.contains{((try? String(contentsOf:$0,encoding:.utf8)) ?? "").contains(credentials.password)},"password is absent from profile files")
         app.observeSessionCookies();var ready=false;app.restoreCookies{ready=true};try waitUntil({ready});ready=false
         app.installCookies([fresh]){ready=true};try waitUntil({ready})
-        // Hosted CI has no interactive WebKit session and may not dispatch the
-        // system cookie observer. Exercise the callback there; local runs still
-        // verify that WebKit delivers the notification automatically.
+        // Hosted CI exercises the callback explicitly; local runs verify system delivery.
         if ProcessInfo.processInfo.environment["CI"] != nil { app.cookiesDidChange(in:app.store.httpCookieStore) }
         let vault=SessionVault(root:root.appendingPathComponent("Session"))
         try waitUntil({vault.read().map{campusBearer(decodedCookies($0))==campusBearer([fresh])} ?? false})
@@ -187,7 +185,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         defer{try? FileManager.default.removeItem(at:slotFolder)}
         let slotIndex=slotFolder.appendingPathComponent("index.json")
         var slotValues=["campus":Data("legacy-protected".utf8)],slotRequests=[String](),slotFailures=[OSStatus](),denyOld=true
-        let slotBackend:CredentialSlots.Backend={name,data,remove,onError in
+        let slotBackend:CredentialSlots.Backend={name,data,remove,allowUI,onError in
             slotRequests.append(name)
             if name=="campus" && denyOld{onError(errSecInteractionNotAllowed);return nil}
             if remove{slotValues.removeValue(forKey:name);return nil}
@@ -204,19 +202,22 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==syntheticSlotSecret && slotValues["campus-app-build-B"]==syntheticSlotSecret,"readable previous slot migrates silently to next build")
         _ = nextSlots.access("campus",nil,remove:true,onError:{slotFailures.append($0)});denyOld=false;slotRequests.removeAll()
         check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==nil && slotRequests.isEmpty,"explicit delete tombstone prevents legacy secret resurrection")
-        // Personal AI credentials remain private and survive a rebuild.
-        check(fileStoredCredential("account-deepseek") && !fileStoredCredential("cookies") && !fileStoredCredential("identity"),"personal API key uses the owner-only file store")
+        // Legacy plaintext API keys migrate only after verified Keychain storage.
         let keyFile=slotFolder.appendingPathComponent("service-keys.json"),personalSecret=Data("personal-synthetic-deepseek-key".utf8)
-        var keyFailures=[OSStatus](),legacyCalls=0
-        let legacy:ServiceKeyStore.Legacy={_,_ in legacyCalls+=1;return nil}
-        let firstBuild=ServiceKeyStore(url:keyFile)
-        check(firstBuild.access("account-deepseek",personalSecret,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==personalSecret,"personal key is saved")
-        let keyMode=(try FileManager.default.attributesOfItem(atPath:keyFile.path))[.posixPermissions] as? Int
-        check(keyMode==0o600 && keyFailures.isEmpty,"service key file is owner-only")
-        let rebuilt=ServiceKeyStore(url:keyFile)
-        check(rebuilt.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:legacy)==personalSecret && legacyCalls==0,"a rebuilt app reads the personal key without touching Keychain")
-        _ = rebuilt.access("account-deepseek",nil,remove:true,onError:{keyFailures.append($0)},legacy:legacy)
-        check(!((try String(contentsOf:keyFile,encoding:.utf8)).contains("personal-synthetic")),"removing the key clears it")
+        try Data("{\"account-deepseek\":\"personal-synthetic-deepseek-key\"}".utf8).write(to:keyFile)
+        var keyFailures=[OSStatus](),secureValue:Data?,denyWrite=true
+        let backend:ServiceKeyStore.Legacy={value,remove in
+            if remove {secureValue=nil;return nil};if let value=value {if denyWrite{return nil};secureValue=value;return value};return secureValue
+        }
+        let store=ServiceKeyStore(url:keyFile)
+        check(store.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:backend)==nil,"failed Keychain migration fails closed")
+        check(FileManager.default.fileExists(atPath:keyFile.path),"failed migration preserves legacy key for recovery")
+        denyWrite=false
+        check(store.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:backend)==personalSecret,"legacy key migrates to Keychain")
+        check(!FileManager.default.fileExists(atPath:keyFile.path),"verified migration removes plaintext file")
+        check(ServiceKeyStore(url:keyFile).access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:backend)==personalSecret,"secure key remains available")
+        _=store.access("account-deepseek",nil,remove:true,onError:{keyFailures.append($0)},legacy:backend)
+        check(secureValue==nil,"removing API key clears secure storage")
         // Real WKWebView, real App WKUIDelegate methods, isolated nonpersistent data
         // store and hidden window. No account/keychain reads or external requests.
         let application=NSApplication.shared;application.setActivationPolicy(.prohibited)
@@ -389,6 +390,20 @@ final class SyntheticCourseProtocol:URLProtocol {
         qwenStream.consume(Data((#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"home\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"completion_tokens":7}}"#+"\n\ndata: [DONE]\n").utf8))
         check(qwenStream.answer=="本地 Qwen" && qwenStream.finishReason=="tool_calls" && (qwenStream.calls[0]?["function"] as? [String:String])?["arguments"]=="{\"page\":\"home\"}" && qwenStream.usage["completion_tokens"] as? Int==7,"local Qwen SSE preserves incremental tool calls and usage")
         qwenStream.session.invalidateAndCancel()
+        let protectedRoot=isolated.appendingPathComponent("protected-session")
+        let legacy=SessionVault(root:protectedRoot),protectedContent=Data("synthetic-session-for-migration".utf8)
+        try legacy.save(protectedContent)
+        var protectedKey:Data?,denyProtectedWrite=true
+        let protected=SessionVault(root:protectedRoot){value,remove in
+            if remove{protectedKey=nil;return nil};if let value=value{if denyProtectedWrite{return nil};protectedKey=value};return protectedKey
+        }
+        check(protected.read()==protectedContent && FileManager.default.fileExists(atPath:protectedRoot.appendingPathComponent("session-key.bin").path),"denied session-key migration preserves the old readable session")
+        denyProtectedWrite=false
+        check(protected.read()==protectedContent && protectedKey != nil && !FileManager.default.fileExists(atPath:protectedRoot.appendingPathComponent("session-key.bin").path),"verified secure migration removes the legacy key only after readback")
+        try protected.save(protectedContent);check(protected.read()==protectedContent,"secure session remains readable after persistence")
+        let blocked=SessionVault(root:protectedRoot){_,_ in nil}
+        do{try blocked.save(Data("must-not-overwrite".utf8));fatalError("locked session overwritten")}catch{check(protected.read()==protectedContent,"locked secure session is never overwritten by a new key")}
+        protected.remove();check(protectedKey==nil && protected.read()==nil,"logout removes the protected session key")
         let vaultRoot=isolated.appendingPathComponent("sealed-contract"),vault=SessionVault(root:vaultRoot),secret=Data("synthetic-session-secret".utf8)
         try vault.save(secret);let ciphertext=try Data(contentsOf:vaultRoot.appendingPathComponent("session.sealed"))
         check(!ciphertext.contains(secret) && vault.read()==secret,"protected snapshot is encrypted and decrypts across app instances")
@@ -500,11 +515,11 @@ final class SyntheticCourseProtocol:URLProtocol {
         for _ in 0..<3{check(try bridgeCall("secret") as? String=="","silently blocked API secret stays unavailable without UI")}
         let blockedStatus=try bridgeCall("keychainStatus") as! [String:Any];check(blockedStatus["apiAuthorizationRequired"] as? Bool==true && silentDenied==1,"blocked old secret is negatively cached")
         let blockedRecovery=try bridgeCall("authorizeCredentials",["purpose":"api"]) as! [String:Any]
-        check(blockedRecovery["ready"] as? Bool==false && interactiveAttempts==0,"legacy recovery bridge cannot enable Keychain interaction")
-        _ = try bridgeCall("secret");check(silentDenied==2 && interactiveAttempts==0,"failed legacy recovery remains silent and does not loop")
+        check(blockedRecovery["ready"] as? Bool==false && interactiveAttempts==1,"explicit recovery can request Keychain interaction")
+        _ = try bridgeCall("secret");check(silentDenied==2 && interactiveAttempts==1,"failed legacy recovery remains silent and does not loop")
         _ = try bridgeCall("secret",["text":"sk-synthetic-reconfigured-key-123456"])
         check(try bridgeCall("secret") as? String=="sk-synthetic-reconfigured-key-123456" && unexpectedCredentialReads==0,"in-app reconfiguration saves a usable key without touching session credentials")
-        check(interactiveAttempts==0,"all credential routes suppress interactive backend access including writes")
+        check(interactiveAttempts==2,"explicit credential write can request Keychain interaction")
         app.storageQueue.sync{SessionVault(root:app.root.appendingPathComponent("Session")).remove()}
         var guardedCookieReads=0
         app.storageQueue.sync{app.credentialCache.invalidate()};app.testKeychainOperation={name,data,remove,allowUI,onError in if name=="cookies"{guardedCookieReads+=1;onError(errSecInteractionNotAllowed)};return nil}
@@ -570,7 +585,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         var interactiveSessionAccess=0;app.testKeychainOperation={_,_,_,allowUI,onError in if allowUI{interactiveSessionAccess+=1};onError(errSecInteractionNotAllowed);return nil}
         app.sessionNeedsResume=false;app.testSessionBootstrap={done in done(false)}
         let sessionRecovery=try bridgeCall("authorizeCredentials",["purpose":"session"]) as! [String:Any]
-        check(sessionRecovery["authorizationRequired"] as? Bool==false && interactiveSessionAccess==0,"explicit session recovery also forbids interactive credential reads")
+        check(sessionRecovery["authorizationRequired"] as? Bool==false && interactiveSessionAccess>0,"explicit session recovery may request system authorization")
         let impossible=isolated.appendingPathComponent("not-a-directory");try Data("blocked".utf8).write(to:impossible)
         do{try writeLogoutMarker(in:impossible);fatalError("marker write accepted invalid directory")}catch{checks+=1}
         // Actual loopback service and hidden WK page render while a synthetic
