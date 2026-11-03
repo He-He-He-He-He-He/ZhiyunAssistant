@@ -91,6 +91,9 @@ final class SmokeServer {
           window.native={
             call(action,params={}){const id='fixture-'+(++sequence);window.__smoke.calls.push(action);const promise=new Promise((resolve,reject)=>queueMicrotask(()=>{try{let value=true;
               switch(action){
+                case'applicationInfo':value={version:'1.8.8',platform:'darwin',arch:'universal'};break;
+                case'updateFeed':value='[]';break;
+                case'openRelease':window.__smoke.releaseURL=params.url;break;
                 case'identity':value=params.text!==undefined?true:sessionAuthorizationRequired?'':JSON.stringify({id:'synthetic-account',name:'本机测试',tenantId:112,username:'synthetic'});break;
                 case'keychainStatus':value={authorizationRequired:sessionAuthorizationRequired||apiAuthorizationRequired,sessionAuthorizationRequired,apiAuthorizationRequired};break;
                 case'externalAgentStatus':value=false;break;
@@ -233,6 +236,7 @@ final class SmokeServer {
       click('浮动显示',assistant);await until(()=>!q('[data-pane=agent]'),'assistant undocking');assert(assistant.parentElement===document.body,'undocked assistant remains outside route DOM');click('收起',assistant);await until(()=>assistant.hidden,'assistant minimise');assert(assistant.hidden&&q('.agent-bubble').hidden,'an idle minimised assistant leaves no floating entry');click('应用助手',q('#studyTools'));await until(()=>!assistant.hidden,'assistant reopens from the study tools');assert(assistant.querySelector('.agent-message strong'),'assistant can minimise without losing conversation');click('收起',assistant);await until(()=>assistant.hidden,'assistant minimise again');
       click('返回',q('#topActions'));await until(()=>q('#pageTitle').textContent==='我的课堂','study back to prior route');click('缓存设置',q('#navigation'));await until(()=>qa('.cache-row').length===8,'cache category list');assert(qa('.cache-row').every(n=>n.textContent.includes('查看详情')&&n.textContent.includes('清理')),'cache controls present for every category');
       click('清理全部缓存',q('#topActions'));await sleep(100);assert(window.__smoke.calls.includes('cache'),'native cache request issued');
+      window.native.event({name:'toolbarAction',value:'privacy'});await until(()=>modal()?.textContent.includes('当前版本 1.8.8'),'current installed version in privacy');const priorChecks=window.__smoke.calls.filter(v=>v==='updateFeed').length;click('检查更新',modal());await until(()=>window.__smoke.calls.filter(v=>v==='updateFeed').length>priorChecks&&modal()?.textContent.includes('当前已是最新可下载版本'),'manual public release check');assert(modal().textContent.includes('每天自动检查更新'),'update automatic setting appears with privacy information');
       assert(window.__smoke.errors.length===0,'no page errors or unhandled rejections');window.__smoke.status='passed';
     })().catch(error=>{window.__smoke.failure=String(error.message)+'\n'+String(error.stack||'');window.__smoke.status='failed'});void 0;
     """#
