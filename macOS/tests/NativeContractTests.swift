@@ -88,10 +88,15 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(!jsonFiles.contains{((try? String(contentsOf:$0,encoding:.utf8)) ?? "").contains(credentials.password)},"password is absent from profile files")
         app.observeSessionCookies();var ready=false;app.restoreCookies{ready=true};try waitUntil({ready});ready=false
         app.installCookies([fresh]){ready=true};try waitUntil({ready})
+        // Hosted CI has no interactive WebKit session and may not dispatch the
+        // system cookie observer. Exercise the callback there; local runs still
+        // verify that WebKit delivers the notification automatically.
+        if ProcessInfo.processInfo.environment["CI"] != nil { app.cookiesDidChange(in:app.store.httpCookieStore) }
         let vault=SessionVault(root:root.appendingPathComponent("Session"))
         try waitUntil({vault.read().map{campusBearer(decodedCookies($0))==campusBearer([fresh])} ?? false})
         check(true,"WebKit token changes are durably observed without closing the app")
         let rotated=token(jwt(7200));ready=false;app.installCookies([rotated]){ready=true};try waitUntil({ready})
+        if ProcessInfo.processInfo.environment["CI"] != nil { app.cookiesDidChange(in:app.store.httpCookieStore) }
         try waitUntil({vault.read().map{campusBearer(decodedCookies($0))==campusBearer([rotated])} ?? false})
         check(true,"rotated official tokens replace the encrypted snapshot immediately")
         let completionApp=App();completionApp.root=root.appendingPathComponent("completion");completionApp.testSessionKeychain={_,_,_ in nil};var completionReady=false
