@@ -257,6 +257,19 @@ export function createServices(session: Session, userData: string, emit: Emit, a
       case 'ai.chatSessions': { const currentStore = requiredStore(); currentStore.useCourse(checkedCourse(payload.course)); return new ChatStore(currentStore).list(); }
       case 'ai.saveChat': { const currentStore = requiredStore(); currentStore.useCourse(checkedCourse(payload.course)); new ChatStore(currentStore).save(payload.session); return null; }
       case 'ai.deleteChat': { const currentStore = requiredStore(); currentStore.useCourse(checkedCourse(payload.course)); new ChatStore(currentStore).delete(payload.id); return null; }
+      case 'assistant.turn': {
+        const currentStore = requiredStore(), generation = accountEpoch;
+        const requestId = String(payload.requestId || '');
+        if (!/^[a-zA-Z0-9_-]{1,100}$/.test(requestId) || clients.has(requestId) || !Array.isArray(payload.messages) || !Array.isArray(payload.tools)) throw new Error('助手请求无效');
+        const client = new AiClient(); clients.set(requestId, client);
+        try {
+          const result = await client.assistantTurn(currentStore, currentStore.readJson('ai-model.txt') || 'deepseek-flash', payload.messages, payload.tools, (text) => {
+            if (generation === accountEpoch) emit('ai.stream', { requestId, text });
+          });
+          if (generation !== accountEpoch) throw new Error('账号已切换');
+          return result;
+        } finally { if (clients.get(requestId) === client) clients.delete(requestId); client.cancel(); }
+      }
       case 'ai.start': return startAi(payload);
       case 'ai.cancel': if (payload.requestId) { clients.get(payload.requestId)?.cancel(); contextLoaders.get(payload.requestId)?.cancel(); } else { clients.forEach(client => client.cancel()); contextLoaders.forEach(loader => loader.cancel()); } return null;
       case 'summary.get': { const summary = summaryStore(checkedCourse(payload.course)), records: Record<string, PageSummaryRecord> = {}, positions: Record<string, number> = {}; for (const scope of ['page', 'before', 'whole', 'course', 'courseAll']) { const values = summary.latest(scope); for (const [pageId, record] of Object.entries(values)) { records[scope + ':' + pageId] = record; positions[scope + ':' + pageId + ':' + (record.id || '')] = summary.position(scope, pageId, record.id || ''); } } return { records, positions, scope: summary.lastScope(), archived: payload.recordId ? summary.record(payload.scope || 'page', payload.pageId, payload.recordId) : undefined }; }

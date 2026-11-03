@@ -12,6 +12,7 @@ export class AiStream {
   answer: string = '';
   calls: ToolCall[] = [];
   done: boolean = false;
+  finishReason: string = '';
   push(chunk: string, changed: (answer: string) => void): void {
     this.buffer += chunk;
     let boundary = this.buffer.indexOf('\n');
@@ -24,7 +25,8 @@ export class AiStream {
           const event = JSON.parse(data) as StreamEvent;
           if (event.usage) this.usage = event.usage;
           if (event.error) throw new Error('AI 服务返回错误，请重试');
-          const delta = event.choices?.[0]?.delta;
+          const choice = event.choices?.[0]; if (choice?.finish_reason) this.finishReason = choice.finish_reason;
+          const delta = choice?.delta;
           if (delta?.content) { this.answer += delta.content; changed(this.answer); }
           delta?.tool_calls?.forEach((part: ToolDelta) => {
             if (!this.calls[part.index]) this.calls[part.index] = { id: '', type: 'function', function: { name: '', arguments: '' } };

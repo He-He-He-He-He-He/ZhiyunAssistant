@@ -3,6 +3,7 @@ import { AiUsage, AiUsageTotals, addUsage } from '../model/AiUsage';
 import { PageGroup } from '../model/Timeline';
 import { SkipDecision } from '../model/SmartSkip';
 import { AiStream, ToolCall } from '../model/AiStream';
+import type { AssistantMessage, AssistantReply } from '../model/AppAssistant';
 import { asset } from '../../desktop/compat';
 import { http } from '../../desktop/compat';
 import { util } from '../../desktop/compat';
@@ -126,6 +127,14 @@ export class AiClient {
       if (status !== 200) throw new Error(status === 401 ? 'API 密钥无效，请重新设置' : status === 402 ? 'DeepSeek 账户余额不足' : `AI 请求失败（${status}）`);
       await ended; if (!parser.done) throw new Error('回答连接中断，请重试'); this.recordUsage(parser.usage); return parser;
     } finally { req.destroy(); this.pending.delete(req); this.aborts.delete(abort); }
+  }
+  async assistantTurn(store: LocalStore, model: string, messages: AssistantMessage[], tools: unknown[], changed: (text: string) => void): Promise<AssistantReply> {
+    const apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 DeepSeek API 密钥');
+    if (!model || model.length > 100 || messages.length > 200 || JSON.stringify(messages).length > 1024 * 1024 || tools.length > 16) throw new Error('助手请求超出限制');
+    this.usageStore = store;
+    const request = { model, messages, max_tokens: 4000, stream: true, thinking: { type: 'disabled' }, tools } as unknown as StreamRequest;
+    const answer = await this.stream(apiKey, request, changed);
+    return { answer: answer.answer, calls: answer.calls, truncated: answer.finishReason === 'length' };
   }
   async ask(store: LocalStore, slides: Slide[], lines: Transcript[], question: string, at: number, whole: boolean, model: string, history: ChatTurn[], progress: (value: string) => void, mode: string = 'auto', currentId: string = '', changed: (answer: string) => void = () => {}, selectedIds: string[] = [], prior: PriorCourseContext | undefined = undefined, loadContext: (() => Promise<CourseMaterials>) | undefined = undefined, onScope: (whole: boolean, expanded: boolean) => void = () => {}, viewingMode: QuestionViewingMode | undefined = undefined): Promise<string> {
     this.usageStore = store;
