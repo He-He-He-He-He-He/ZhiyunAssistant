@@ -2,9 +2,9 @@
   "app": {
     "bundleName": "cn.suike.slides",
     "vendor": "suike",
-    "versionCode": 34,
-    "versionName": "0.7.7",
-    "icon": "$media:app_layered_icon",
+    "versionCode": 35,
+    "versionName": "0.7.8",
+    "icon": "$media:launcher_icon",
     "label": "$string:app_name"
   }
 }
