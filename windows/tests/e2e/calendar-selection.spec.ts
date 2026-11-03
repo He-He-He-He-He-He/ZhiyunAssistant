@@ -6,7 +6,10 @@ import os from 'node:os';
 let app: ElectronApplication, page: Page, folder: string;
 const month = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 7);
 const base = { courseId: 'calendar-selection-course', title: '日历与选区测试课程', teacher: '测试教师', room: '测试教室', status: '6' };
-const courses = [8, 10].map(day => ({ ...base, subId: 'calendar-' + day, start: Date.parse(month + '-' + String(day).padStart(2, '0') + 'T08:00:00+08:00') / 1000, end: Date.parse(month + '-' + String(day).padStart(2, '0') + 'T09:00:00+08:00') / 1000 }));
+const today = new Date(Date.now() + 8 * 3600000).getUTCDate();
+const courseDays = [today, today === 10 ? 8 : 10];
+const emptyDay = [3, 4, 5].find(day => !courseDays.includes(day))!;
+const courses = courseDays.map(day => ({ ...base, subId: 'calendar-' + day, start: Date.parse(month + '-' + String(day).padStart(2, '0') + 'T08:00:00+08:00') / 1000, end: Date.parse(month + '-' + String(day).padStart(2, '0') + 'T09:00:00+08:00') / 1000 }));
 test.beforeAll(async () => {
   folder = fs.mkdtempSync(path.join(os.tmpdir(), '智云助手 日历选择 '));
   app = await _electron.launch({ args: [path.resolve('.')], env: { ...process.env, ZHIYUN_TEST_DATA: folder }, timeout: 30000 });
@@ -55,7 +58,7 @@ test('calendar keeps only current-month dates, marks known records, permits empt
   expect(await page.locator('.zy-calendar-days > *').count()).toBe(42);
   await page.locator('.zy-calendar').getByRole('button', { name: '上个月', exact: true }).click();
   await expect(page.locator('.zy-calendar-navigation strong')).toHaveText(original);
-  await page.locator('.zy-calendar').getByRole('button', { name: month + '-03', exact: true }).click();
+  await page.locator('.zy-calendar').getByRole('button', { name: month + '-' + String(emptyDay).padStart(2, '0'), exact: true }).click();
   await expect(page.locator('.zy-calendar')).toHaveCount(0);
   await expect(page.locator('.page-main')).toContainText('暂无课程');
 });

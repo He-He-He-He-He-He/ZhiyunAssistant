@@ -24,7 +24,7 @@
     "@types/react-dom": "19.2.2",
     "@types/ws": "8.18.1",
     "dompurify": "3.4.17",
-    "electron": "44.7.0",
+    "electron": "44.10.1",
     "electron-builder": "26.15.6",
     "esbuild": "0.25.11",
     "hls.js": "1.6.19",
