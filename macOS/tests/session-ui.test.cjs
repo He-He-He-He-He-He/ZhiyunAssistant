@@ -182,7 +182,7 @@ test('blocked old API keys show in-app reconfiguration without any system author
   const editor=f.app.state().notesEditor;editor.insertFragment('Synthetic local note',true);
   f.app.togglePane('question');f.app.togglePane('summary');
   const input=await waitFor(()=>f.doc.querySelector('#questionBody input[type=password]'),'in-app key form');
-  assert.match(f.doc.querySelector('#questionBody').textContent,/不会要求输入 Mac 密码/);
+  assert.match(f.doc.querySelector('#questionBody').textContent,/需要系统授权/);
   assert.equal(findButton(f.doc,'恢复已保存的密钥'),undefined);
   const course=f.app.state().lesson.subId,page=f.app.state().index;
   input.value='sk-synthetic-reconfigured-key-123456';findButton(f.doc,'保存密钥',f.doc.querySelector('#questionBody')).click();

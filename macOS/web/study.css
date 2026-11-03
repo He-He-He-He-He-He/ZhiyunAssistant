@@ -96,19 +96,11 @@
 #studyTools > [data-kind=view]:first-child.active::before { left: 3px; }
 #studyTools > [data-kind=view]:not(:has(+ [data-kind=view])).active::before { right: 3px; }
 
-/* Tools: quiet icon buttons with tooltips; their names stay for assistive technology. */
-#studyTools > [data-kind=tool] { width: 32px; min-width: 32px; height: 32px; padding: 0; gap: 0; justify-content: center; border-radius: 9px; font-size: 0; }
-#studyTools > [data-kind=tool] .ui-icon { width: 16px; height: 16px; flex-basis: 16px; }
+/* Every study action keeps its icon and label, including narrow windows. */
+#studyTools > [data-kind=tool] { width: auto; min-width: max-content; height: 32px; padding: 0 11px; gap: 6px; justify-content: center; border-radius: 9px; font-size: 12px; font-weight: 500; }
 #studyTools > [data-kind=tool]:hover { background: var(--fill); color: var(--text); }
 #studyTools > [data-kind=tool].active { background: var(--accent-soft); color: var(--accent-ink); }
-#studyTools > [data-kind=view] + [data-kind=tool] { margin-left: 13px; }
-#studyTools > [data-kind=view] + [data-kind=tool]::before { content: ""; position: absolute; left: -7px; top: 8px; bottom: 8px; width: 1px; background: var(--border); }
-#studyTools > [data-kind=tool] { position: relative; }
-/* When the row gets tight the pane switches drop their names before any tool scrolls away. */
-@container study-tools (max-width: 900px) {
-  #studyTools > [data-kind=view], #studyTools > [data-kind=view]:first-child, #studyTools > [data-kind=view]:not(:has(+ [data-kind=view])) { width: 38px; min-width: 38px; padding: 0; gap: 0; justify-content: center; font-size: 0; }
-  #studyTools > [data-kind=view] .ui-icon { width: 16px; height: 16px; flex-basis: 16px; }
-}
+#studyTools > [data-kind=view] + [data-kind=tool] { margin-left: 10px; }
 
 #stage { position: relative; flex: 1 1 0; min-height: 0; height: auto; overflow: hidden; }
 .parity-stage { isolation: isolate; overflow: hidden; contain: layout paint; }
@@ -718,3 +710,9 @@ body:has(.video-fullscreen) #stage { contain: none !important; isolation: auto !
 @media (max-width: 860px) {
   .study-mode #topActions button:has(> .ui-icon) { width: 28px; min-width: 28px; padding: 0; gap: 0; font-size: 0; }
 }
+
+.jump-form > input, .jump-form > h3, .jump-form > .hint { text-align: center; }
+.jump-form > input { padding-inline: 28px; }
+
+#studyTools > [data-kind=tool] { background: var(--fill); margin-right: 3px; }
+:root[data-theme=collage] #studyTools > [data-kind=tool] { border-radius: 999px; }

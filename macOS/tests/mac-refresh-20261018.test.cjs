@@ -28,3 +28,18 @@ test('an expired recovered session proceeds to official authentication without l
  a.api.account=async()=>{throw new Error('登录失效，请重新登录')};a.updateSessionRecovery(true);await a.restoreSignedInSession();
  assert.equal(r.calls.filter(([action])=>action==='login').length,1);assert.equal(r.calls.filter(([action])=>action==='logout').length,0);
 });
+
+test('saved AI key recovery asks for authorization only after an explicit click',async t=>{
+ const r=runtime({extraTestingNames:['apiSetup']});const a=(await r.load('app.js')).testing;a.setup();t.after(()=>{a.cleanup();r.win.close()});await a.enter(r.current);
+ const original=r.win.native.call.bind(r.win.native);r.win.native.call=async(action,params)=>{
+  if(action==='keychainStatus')return {apiAuthorizationRequired:true};
+  if(action==='authorizeCredentials'){r.calls.push([action,params]);return {ready:true};}
+  return original(action,params);
+ };
+ a.put({apiReady:false});await a.togglePane('question');await a.apiSetup('question');
+ assert.equal(r.calls.filter(([name])=>name==='authorizeCredentials').length,0);
+ const recover=[...r.win.document.querySelectorAll('#questionBody button')].find(b=>b.textContent==='恢复 AI 连接');assert.ok(recover);
+ recover.click();await new Promise(resolve=>setTimeout(resolve,30));
+ assert.equal(r.calls.find(([name])=>name==='authorizeCredentials')[1].purpose,'api');
+ assert.equal(r.win.document.querySelector('#questionBody .api-form'),null);
+});

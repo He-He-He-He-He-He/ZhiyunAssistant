@@ -1,3 +1,5 @@
+import { syncTranscriptLines } from "./transcript-sync.js";
+import { skipRangesForPage, skipPageOrder, skipAnalysisGroups, decodeSkipDecision, automaticSegmentSkip } from "./smart-skip-local.js";
 import {setupUpdates} from './update-ui.js';
 import { syncWindowChrome, appearanceMode, applyAppearanceMode } from "./themes.js";
 import { AppActions } from "./agent-runtime.js";
@@ -66,9 +68,7 @@ import { courseAnswerParts } from "./models/CourseReference.js";
 import { priorLessons, priorMaterial } from "./models/CourseContext.js";
 import { questionScope } from "./models/QuestionScope.js";
 import {
-  conservativeRanges,
   filteredTranscript,
-  automaticSkip,
   untranscribedBoundaries,
   mergedSkipRanges,
 } from "./models/SmartSkip.js";
@@ -1749,7 +1749,7 @@ async function enter(
   );
   if (data) {
     slides = data.slides || [];
-    lines = data.lines || [];
+    lines = syncTranscriptLines(data.lines || [], prefs.transcriptSync?.[courseKey(c)] || []);
     videoSources = data.videos || [];
     if (local) {
       slides.forEach((s) => {
@@ -1795,7 +1795,7 @@ async function enter(
     if (result[0].status === "fulfilled")
       slides = mergeSlides([], result[0].value);
     if (result[1].status === "fulfilled")
-      lines = reconcileLines(lines, result[1].value);
+      lines = reconcileLines(lines, syncTranscriptLines(result[1].value, prefs.transcriptSync?.[courseKey(lesson)] || []));
     if (phase(lesson, Date.now() / 1000) === "ended")
       applyPaneAvailability([
         ...(result[0].status === "fulfilled" && !slides.length
@@ -2100,6 +2100,7 @@ function createPane(key) {
   }
   if (key === "transcript") {
     head.querySelector(".mini").append(
+      button("同步校准", showTranscriptSync),
       iconButton("previous","上一页",()=>pageMove(-1)),
       iconButton("next","下一页",()=>pageMove(1)),
     );
@@ -2620,7 +2621,7 @@ function renderTranscript() {
   const anchor = captureScrollAnchor(body, "[data-line]"),
     split =
       (prefs.panes.includes("slides") || prefs.panes.includes("summary")) &&
-      groups.length > 0,
+      groups.length > 0 && (manual || mediaTime() >= groups[0].slide.t),
     count = split ? capacity() : 1;
   const sets = split
     ? displayedPageGroups().map(({ group: g }) =>
@@ -2714,6 +2715,39 @@ function renderTranscript() {
   }
   highlightCurrent(false);
   updateReturn("transcript");
+}
+function showTranscriptSync() {
+  if (!video?.src || currentVideoSource()?.live) return toast("请先打开课程回放视频");
+  const generation = lessonToken, key = courseKey(lesson), position = videoCourseTime();
+  video.pause();
+  openModal("转写同步校准");
+  const body = $("#modalBody"), form = el("div", {class:"api-form"});
+  const nearby = lines.filter(l=>Math.abs(l.t-position)<90);
+  form.append(el("p", {text:"视频已暂停在 " + stamp(position) + "。选择刚开始听到的那句话，将句首对齐此位置；仅保存在本节课。"}));
+  const chosen = el("select", {style:"width:100%;max-width:100%"});
+  nearby.forEach(l=>chosen.append(new Option(stamp(l.t)+" · "+l.text,l.id)));
+  chosen.value=lines[currentSpokenLineIndex(lines,position)]?.id||nearby[0]?.id||"";
+  const apply = async points => {
+    if(generation!==lessonToken)return;
+    prefs.transcriptSync={...prefs.transcriptSync,[key]:points};
+    await save("prefs.json",prefs);
+    if(generation!==lessonToken)return;
+    lines=syncTranscriptLines(lines,points);
+    // Previously inferred skip ranges were based on different sentence times.
+    skipRun++;skipEnabled=false;skipBusy=false;skipRanges=[];
+    regroup();index=playbackPageIndex(position);at=position;following=true;manual=false;
+    renderSlides();renderTranscript();renderTools();await cacheLesson();closeModal();
+    toast(points.length?"已保存本课同步校准":"已恢复平台原始时间");
+  };
+  form.append(chosen,button("将句首对齐当前视频",()=>{
+    const line=nearby.find(l=>l.id===chosen.value);if(!line)return;
+    const source=line.sourceT??line.t;
+    const points=(prefs.transcriptSync?.[key]||[]).filter(p=>Math.abs(p.source-source)>0.1);
+    points.push({source,target:position});points.sort((a,b)=>a.source-b.source);
+    if(points.some((p,i)=>i&&p.target<=points[i-1].target))return toast("与已有校准位置冲突，请先恢复原始时间再校准");
+    return apply(points);
+  },"primary"),button("恢复平台原始时间",()=>apply([])));
+  body.append(form);
 }
 function highlightCurrent(scroll = true) {
   const body = $("#transcriptBody");
@@ -2892,7 +2926,7 @@ function pageJump() {
     value: index + 1,
   });
   $("#modalBody").append(
-    el("div", { class: "api-form" }, [
+    el("div", { class: "api-form jump-form" }, [
       input,
       button(
         "跳转",
@@ -2958,7 +2992,7 @@ function timeJump() {
     wheels.append(el("label", {}, [input, el("span", { text: unit })]));
   }
   $("#modalBody").append(
-    el("div", { class: "api-form" }, [
+    el("div", { class: "api-form jump-form" }, [
       label,
       wheels,
       el("div", {
@@ -3027,6 +3061,10 @@ function overview(picker) {
       save("prefs.json", prefs);
       renderOverview();
     }),
+    check("跳过无实质讲解", skipEnabled, async () => {
+      await toggleSmartSkip();
+      if (!$("#modal").hidden && overviewControl) overview(picker);
+    }),
     button("－", () => {
       if (!overviewSelect) {
         overviewCols = Math.min(8, overviewCols + 1);
@@ -3092,7 +3130,7 @@ function renderOverview() {
   const existing = new Map([...grid.children].map(node => [node.dataset.id, node]));
   const cards = [];
   groups.forEach((g, i) => {
-    if (prefs.skip && !effectiveLines(g).length) return;
+    if ((prefs.skip && !effectiveLines(g).length) || (skipEnabled && !filteredTranscript(g.lines, skipRanges).length)) return;
     let card = existing.get(g.slide.id);
     if (!card) card = el("div", { class: "overview-item", "data-id": g.slide.id }, [
       el("img", { loading: "lazy", decoding: "async", alt: "课件" }),
@@ -3144,18 +3182,7 @@ function buildVideo(body) {
       head.append(button("重试", () => loadVideo(false)));
   };
   video.ontimeupdate = () => {
-    if (skipEnabled) {
-      const next = automaticSkip(
-        videoCourseTime(),
-        lesson.end - lesson.start,
-        skipRanges,
-      );
-      if (next)
-        video.currentTime = Math.min(
-          video.duration - 0.1,
-          next.end - (currentVideoSource()?.offset || 0),
-        );
-    }
+    applyAutomaticSkip();
     updateVideoControls();
     highlightCurrent();
     if (following && !manual) {
@@ -3167,6 +3194,10 @@ function buildVideo(body) {
         renderTranscript();
         renderSummary();
       }
+      const transcript = $("#transcriptBody");
+      const split = (prefs.panes.includes("slides") || prefs.panes.includes("summary")) &&
+        groups.length > 0 && videoCourseTime() >= groups[0].slide.t;
+      if (transcript && transcript.dataset.split !== String(split)) renderTranscript();
     }
   };
   video.onseeked = () => {
@@ -3429,7 +3460,7 @@ async function startLive(gen) {
       if (result[0].status === "fulfilled")
         slides = mergeSlides(slides, result[0].value);
       if (result[1].status === "fulfilled")
-        lines = reconcileLines(lines, result[1].value);
+        lines = reconcileLines(lines, syncTranscriptLines(result[1].value, prefs.transcriptSync?.[courseKey(lesson)] || []));
       regroup();
       index =
         following && !video
@@ -4310,7 +4341,7 @@ function apiSetup(key) {
       el("h3", { text: apiReady ? "API设置" : "连接 AI 助手" }),
       el("p", {
         class: "hint",
-        text: "个人 API 可从 DeepSeek 开放平台获取，费用由个人 API 账户承担。密钥仅保存在本机用户可读的文件中。本地模型无需密钥，需先安装本地服务及所选的 Gemma 或 Qwen。",
+        text: "个人 API 可从 DeepSeek 开放平台获取，费用由个人 API 账户承担。密钥保存在本机系统钥匙串中。本地模型无需密钥，需先安装本地服务及所选的 Gemma 或 Qwen。",
       }),
       input,
       select(
@@ -4379,7 +4410,23 @@ function apiSetup(key) {
       return secret ? resumeAPI() : renderForm();
     }
     renderForm();
-    body.querySelector('.api-form')?.append(el('p', { class:'hint', text:'旧版本密钥无法静默读取，请在此重新配置。不会要求输入 Mac 密码。' }));
+    const hint = el("p", { class: "hint", role: "status", text: "已保存的密钥需要系统授权后才能读取。你可以恢复连接，也可以输入新密钥。" });
+    const recover = button("恢复 AI 连接", async () => {
+      if (!active() || recover.disabled) return;
+      recover.disabled = true;
+      hint.textContent = "请完成 macOS 钥匙串授权…";
+      try {
+        const result = await native.call("authorizeCredentials", { purpose: "api" });
+        if (!active()) return;
+        if (result?.ready) return resumeAPI();
+        hint.textContent = "尚未获得密钥读取授权。可以再次恢复连接，或输入新密钥。";
+      } catch (error) {
+        if (active()) hint.textContent = error.message || "暂时无法读取已保存的密钥";
+      } finally {
+        recover.disabled = false;
+      }
+    });
+    body.querySelector(".api-form")?.append(hint, recover);
   }).catch((error) => {
     if (!active()) return;
     renderForm();
@@ -5772,6 +5819,7 @@ setInterval(() => {
   }
 }, 15000);
 const visionCache = new Map();
+let skipRun = 0;
 let skipEnabled = false,
   skipBusy = false,
   skipRanges = [],
@@ -5859,7 +5907,9 @@ async function readSlideOnce(slide, generation) {
 }
 async function toggleSmartSkip() {
   if (skipEnabled) {
+    skipRun++;
     skipEnabled = false;
+    skipBusy = false;
     renderTools();
     renderTranscript();
     return;
@@ -5870,7 +5920,7 @@ async function toggleSmartSkip() {
   }
   if (
     !confirm(
-      "开启后会逐页分析课程转写，必要时读取课件，会产生额外 DeepSeek API 费用。会保留有用的讲解、例子、作业和课程安排。是否开启？",
+      "开启后会分段分析整节课的转写，包括第一张课件之前的内容，会产生额外 AI API 费用。会保留有用的讲解、例子、作业和课程安排。是否开启？",
     )
   )
     return;
@@ -5881,9 +5931,11 @@ async function toggleSmartSkip() {
 async function processSkip() {
   if (skipBusy) return;
   skipBusy = true;
-  const gen = lessonToken,
-    end = lesson.end - lesson.start,
-    complete = phase(lesson, Date.now() / 1000) === "ended";
+  const gen = lessonToken, run = ++skipRun,
+    end = Number.isFinite(video?.duration) ? video.duration + (currentVideoSource()?.offset || 0) : lesson.end - lesson.start,
+    complete = phase(lesson, Date.now() / 1000) === "ended",
+    snapshot = skipAnalysisGroups(lines, end),
+    active = () => gen === lessonToken && run === skipRun && skipEnabled;
   skipRanges = untranscribedBoundaries(lines, end, complete, !lines.length);
   applyAutomaticSkip();
   const indicator = el(
@@ -5893,18 +5945,16 @@ async function processSkip() {
       style:
         "position:absolute;right:12px;bottom:14px;z-index:20;padding:8px 12px;border-radius:10px;background:#eff7ff;box-shadow:0 2px 8px #26385218;font-size:12px",
     },
-    ["正在处理 ", el("progress", { max: groups.length || 1, value: 0 })],
+    ["正在处理 ", el("progress", { max: snapshot.length || 1, value: 0 })],
   );
   $("#stage")?.append(indicator);
   try {
-    for (
-      let i = 0;
-      i < groups.length && skipEnabled && gen === lessonToken;
-      i++
-    ) {
-      const group = groups[i],
-        finish = groups[i + 1]?.slide.t || end;
-      if (!complete && i === groups.length - 1) break;
+    let processed = 0;
+    for (const i of skipPageOrder(snapshot, video?.src ? videoCourseTime() : at)) {
+      if (!active()) break;
+      const group = snapshot[i],
+        finish = snapshot[i + 1]?.slide.t || end;
+      if (!complete && i === snapshot.length - 1) continue;
       const key =
         "skip-" +
         courseKey(lesson) +
@@ -5912,6 +5962,7 @@ async function processSkip() {
         group.slide.id.replace(/[^a-zA-Z0-9_-]/g, "_") +
         ".json";
       let decision = await saved(key, true);
+      if (!active()) break;
       const version = JSON.stringify(
         group.lines.map((l) => [l.id, l.t, l.end, l.text]),
       );
@@ -5922,40 +5973,46 @@ async function processSkip() {
             {
               role: "system",
               content:
-                '识别课堂中确定无实质讲解的连续片段。只返回JSON：{"spans":[{"ids":["转写id"],"kind":"noise|break|chatter","confidence":0到1,"reason":"判断证据"}],"emptyPage":false,"confidence":0,"visual":"unknown"}。判断只针对杂音、课间无关闲聊、课前课后测试收音。保护知识讲解、课堂互动、实例、作业、考试、强调复述、课堂安排。不因内容少或语速慢而删除。ids必须是给定转写中连续的id。',
+                '识别课堂中确定无实质讲解的连续片段。只返回JSON：{"spans":[{"first":0,"last":2,"kind":"noise|break|chatter","confidence":0.99,"reason":"判断证据"}]}。first和last是lines数组中连续片段首尾句子的n，必须为范围内整数，包含两端。previous和next仅供理解上下文，不能列入范围。结合课程与完整后文判断课前准备、设备调试、无关闲聊及杂音；如果后文明确开始上课，之前连续的设备调试和无关闲聊可以整体标出，不能仅因乱码就断言无效。每个判断给出真实置信度；不确定的知识内容保留。课堂播放的教学视频、宣传片、英文音频、学生汇报也是课程内容，必须保留。保护知识讲解、互动、例子、作业、考试、课程安排和强调复述。不因内容少或语速慢而删除。',
             },
-            { role: "user", content: JSON.stringify(group.lines) },
+            { role: "user", content: JSON.stringify({course: lesson.title, start: group.slide.t, end: finish, previous: snapshot[i-1]?.lines.slice(-5).map(l=>({t:l.t,text:l.text})) || [], lines: group.lines.map((l,n)=>({n,t:l.t,end:l.end,text:l.text})), next: snapshot.slice(i+1,i+(i===0?3:2)).flatMap(g=>g.lines).slice(0,i===0?65:10).map(l=>({t:l.t,text:l.text}))}) },
           ],
           (chunk) => (text += chunk),
         );
+        if (!active()) break;
+        text = text || result?.text || result?.content || "";
         const match = text.match(/\{[\s\S]*\}/);
-        decision = { data: JSON.parse(match?.[0] || text), version };
+        decision = { data: decodeSkipDecision(JSON.parse(match?.[0] || text), group.lines), version };
         await save(key, decision, true);
       }
+      if (!active()) break;
       skipRanges = mergedSkipRanges(
         skipRanges.concat(
-          conservativeRanges(group, finish, decision.data, true, false),
+          skipRangesForPage(group, finish, decision.data),
         ),
         lines,
         complete,
       );
+      if (!active()) break;
       renderTranscript();
+      if (overviewControl && !$("#modal").hidden) renderOverview();
       applyAutomaticSkip();
-      indicator.querySelector("progress").value = i + 1;
+      indicator.querySelector("progress").value = ++processed;
     }
+    if (!active()) return;
     toast(
       skipRanges.length
         ? "已识别 " + skipRanges.length + " 段无实质讲解"
         : "未发现可放心跳过的片段",
     );
   } catch (e) {
-    toast(e.message);
+    if (active()) toast("部分片段未处理完成：" + e.message);
   } finally {
-    if (gen === lessonToken) skipBusy = false;
+    if (gen === lessonToken && run === skipRun) skipBusy = false;
     indicator.remove();
-    if (gen === lessonToken) {
+    if (gen === lessonToken && run === skipRun) {
       renderTools();
-      if (prefs.skip && skipEnabled) chooseSkipMode();
+      if (prefs.skip && skipEnabled && !overviewControl) chooseSkipMode();
     }
   }
 }
@@ -6166,7 +6223,7 @@ function featureButtonContent(id) {
     );
   if (id === "skip")
     return button(
-      "跳过无转写" + (skipEnabled ? " ▾" : ""),
+      "跳过" + (skipEnabled ? " ▾" : ""),
       () => {
         if (skipEnabled) return chooseSkipMode();
         prefs.skip = !prefs.skip;
@@ -6207,7 +6264,7 @@ function effectiveLines(g) {
     : g.lines;
 }
 function chooseSkipMode() {
-  openModal("跳过无转写");
+  openModal("跳过");
   $("#modalBody").append(
     el("div", { class: "api-form" }, [
       button(
@@ -6251,7 +6308,7 @@ function showSettings() {
     ...paneNames,
     crop: "去课件黑边",
     duplicates: "合并重复课件",
-    skip: "跳过无转写",
+    skip: "跳过",
     smartSkip: "跳过无实质讲解",
     follow: "回到最新",
     overview: "课件概览",
@@ -6462,8 +6519,8 @@ async function readVideoOffset(source) {
   const text = await response.text();
   const tag = /#EXT-X-PROGRAM-DATE-TIME:([^\r\n]+)/.exec(text);
   if (tag) {
-    const offset = Date.parse(tag[1]) / 1000 - lesson.start;
-    if (Number.isFinite(offset) && offset >= 0) source.offset = offset;
+    const offset = Date.parse(tag[1]) / 1000 - (source.clockStart || lesson.start);
+    if (Number.isFinite(offset) && Math.abs(offset) < 86400) source.offset = offset;
   }
 }
 
@@ -6710,10 +6767,10 @@ function syncAIOptions() {
   }
 }
 function applyAutomaticSkip() {
-  if (!video?.src || currentVideoSource()?.live) return;
-  const next = automaticSkip(
+  if (!skipEnabled || !video?.src || currentVideoSource()?.live) return;
+  const next = automaticSegmentSkip(
     videoCourseTime(),
-    Math.max(0, lesson.end - lesson.start),
+    Number.isFinite(video.duration) ? video.duration + (currentVideoSource()?.offset || 0) : Math.max(0, lesson.end - lesson.start),
     skipRanges,
   );
   if (next && Number.isFinite(video.duration))

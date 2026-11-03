@@ -155,6 +155,43 @@ export class MacZhiyun extends Zhiyun {
     this.scheduleSnapshots = new Map();
     this.historyRuns = new Set();
   }
+  mediaClocks = new Map();
+  mediaClockRequests = new Map();
+  async info(course) {
+    const info = await super.info(course);
+    const start = Number(info.begin_time);
+    if (Number.isFinite(start) && start > 1e9 && Math.abs(start - course.start) < 86400)
+      this.mediaClocks.set(keyOf(course), start);
+    return info;
+  }
+  async mediaCourse(course) {
+    const key = keyOf(course);
+    if (!this.mediaClocks.has(key)) {
+      if (!this.mediaClockRequests.has(key)) this.mediaClockRequests.set(key, this.info(course).catch(() => null).finally(() => this.mediaClockRequests.delete(key)));
+      await this.mediaClockRequests.get(key);
+    }
+    return { ...course, start: this.mediaClocks.get(key) || course.start };
+  }
+  async slidesFrom(course, origin) {
+    const clock = await this.mediaCourse(course);
+    const rows = await super.slidesFrom(clock, origin);
+    return rows.map(slide => {
+      // Timestamped capture filenames are wall-clock times; created_sec can use
+      // an earlier capture-service epoch, unrelated to the recording's beginning.
+      const match = /\/(1\d{12})\.(?:jpg|jpeg|png)(?:[?#]|$)/i.exec(slide.url);
+      const captured = match ? Number(match[1]) / 1000 : NaN;
+      return Number.isFinite(captured) && Math.abs(captured - clock.start) < 86400
+        ? { ...slide, t: Math.max(0, captured - clock.start) } : slide;
+    });
+  }
+  async transcriptsFrom(course, origin) {
+    return super.transcriptsFrom(await this.mediaCourse(course), origin);
+  }
+  async videos(course) {
+    const rows = await super.videos(course);
+    const clock = await this.mediaCourse(course);
+    return rows.map(source => ({ ...source, clockStart: clock.start }));
+  }
   background(signal) {
     const client = new MacZhiyun({ signal });
     client.usePermissionStorage(this.permissionStorage);
@@ -165,6 +202,8 @@ export class MacZhiyun extends Zhiyun {
   dispose() { this.signal?.removeEventListener('abort', this.abortRequest); this.cancel(); }
   /** Explicit logout cleanup is available; automatic rebinding also clears records. */
   reset(account = null) {
+    this.mediaClocks.clear();
+    this.mediaClockRequests.clear();
     super.cancel();
     this.scheduleScope = account ? scopeOf(account) : "";
     this.scheduleRevision++;
