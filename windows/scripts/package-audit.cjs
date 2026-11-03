@@ -41,7 +41,7 @@ function sensitiveEntry(filename) {
   if (/\.(?:p12|pfx|jks|keystore|pem|key|mobileprovision|hap)$/i.test(name)) return 'signing or credential file';
   if (/(?:^|\/)(?:\.env(?:\.[^/]*)?|build-profile\.json5|local\.properties|last-account\.json|session[^/]*\.json|permissions-v1\.json|offline-v1\.json|download-jobs-v1\.json|notes-[a-f0-9-]+\.json)$/i.test(name)) return 'private local state';
   if (/(?:^|\/)(?:publish-captures|脱敏截图|resource-cache|note-images|saved-images|video-[a-f0-9]+)(?:\/|$)/i.test(name)) return 'user or course resource directory';
-  if (/\.(?:png|jpe?g|webp|gif|bmp)$/i.test(name) && !/^(?:assets\/icon\.(?:png|ico)|dist\/renderer\/icon\.png)$/.test(name) && !name.startsWith('node_modules/')) return 'unexpected course or user image';
+  if (/\.(?:png|jpe?g|webp|gif|bmp)$/i.test(name) && !/^(?:assets\/icon\.(?:png|ico)|dist\/renderer\/icon\.png)$/.test(name) && !['assets/sky_hero.webp','dist/renderer/sky_hero.webp'].includes(name) && !name.startsWith('node_modules/')) return 'unexpected course or user image';
   if (/\.(?:map|log)$/i.test(name)) return 'development source map or log';
   return '';
 }

@@ -15,6 +15,7 @@ export struct PaneFrame {
   @BuilderParam content: () => void = emptyPane;
   @Prop namespace: string = '';
   @Prop backgroundFocus: boolean = true;
+  @Prop transparentWhenClosed: boolean = false;
   onBackgroundFocus: () => void = () => {};
   private focusBackground(): void { if (!this.backgroundFocus || NativeSelections.isHeld(this.rect.id)) return; NativeSelections.clearGroup(this.rect.id); this.onActivate(); this.onBackgroundFocus(); this.getUIContext().getFocusController().requestFocus(this.namespace + 'pane-key-' + this.rect.id); }
   private backgroundKey(event: KeyEvent): boolean { return this.backgroundFocus && ['transcript', 'summary'].includes(this.rect.id) && NativeSelections.keyGroup(this.rect.id, event); }
@@ -39,7 +40,7 @@ export struct PaneFrame {
           .onClick(() => this.select())
           .gesture(PanGesture({ direction: PanDirection.All, distance: 2 }).onActionStart(() => this.begin()).onActionUpdate((event: GestureEvent) => this.move(event)))
       }
-    }.width('100%').height('100%').id(this.namespace + 'pane-' + this.rect.id).onClick(() => this.onActivate()).backgroundColor(STUDY_SURFACE).border({ width: this.selected && this.adjustable ? 1 : 0, color: '#168BEE' }).borderRadius(this.controls ? STUDY_RADIUS : 0).clip(true)
+    }.width('100%').height('100%').id(this.namespace + 'pane-' + this.rect.id).onClick(() => this.onActivate()).backgroundColor(this.transparentWhenClosed && !this.controls ? Color.Transparent : STUDY_SURFACE).border({ width: this.selected && this.adjustable ? 1 : 0, color: '#168BEE' }).borderRadius(this.controls ? STUDY_RADIUS : 0).clip(true)
       .onTouch((event: TouchEvent) => { if (event.type === TouchType.Down) this.focusBackground(); })
   }
 }
