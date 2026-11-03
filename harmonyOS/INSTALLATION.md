@@ -1,12 +1,12 @@
 # 鸿蒙版安装说明
 
-智云助手 0.7.4，手机和平板共用。最低 HarmonyOS 6.1.1 / API 24，开发构建使用 API 26 SDK。本版本尚未在华为应用市场正式上架；备案、授权材料、发行签名与审核流程尚待完成，现阶段提供开发者自行签名安装的方式。
+智云助手鸿蒙预览版，手机和平板共用。最低 HarmonyOS 6.1.1 / API 24，开发构建使用 API 26 SDK。本版本尚未在华为应用市场正式上架；备案、授权材料、发行签名与审核流程尚待完成，现阶段提供开发者自行签名安装的方式。
 
 **开发者模式 + 自己设备的调试签名 + 安装工具，三者都需要。** 下载的 `unsigned.hap` 不包含作者的签名或设备列表，不能直接点开安装，也不能仅开启开发者模式就安装。华为要求应用先签名，调试 Profile 与设备绑定，详见[应用签名要求](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-v5/experience-suggestions-security-debug-V5)及[申请调试 Profile](https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-debug-profile-0000002248181278)。
 
 ## 推荐：用 DevEco Studio 从源码安装
 
-1. 下载并完整解压 `ZhiyunAssistant-HarmonyOS-0.7.4-PublicSource.zip`，安装[华为官方 DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)，在 IDE 内安装支持 API 26 的 HarmonyOS SDK。
+1. 下载并完整解压仓库源码（或对应版本的鸿蒙源码包），安装[华为官方 DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)，在 IDE 内安装支持 API 26 的 HarmonyOS SDK。
 2. 在手机或平板的“设置 → 关于本机”连续点击软件版本号，按系统提示开启开发者模式；进入开发者选项开启 USB 调试。系统菜单因版本而异，按[华为开启开发者选项说明](https://consumer.huawei.com/cn/support/content/zh-cn02842747/)操作。USB 连接电脑后，在自己的设备上允许调试连接。
 3. 将工程中的 `build-profile.example.json5` 复制为 `build-profile.json5`，用 DevEco Studio 打开工程文件夹。
 4. 在 `File → Project Structure → Signing Configs`（中文界面为项目结构/签名配置）登录自己的华为开发者账号，为当前设备配置自动调试签名。签名材料与设备信息保留在自己的电脑上，无须提交到本仓库。

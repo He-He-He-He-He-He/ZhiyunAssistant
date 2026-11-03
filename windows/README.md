@@ -5,14 +5,14 @@ AI 功能需要用户自行配置个人 DeepSeek API。
 
 
 
-当前版本 **0.8.0-beta.1**。采用 Electron、React 与受限桌面服务，迁移现有智云课程 API、时间线、重复课件、笔记及 AI 上下文模型。目标是保留鸿蒙版本的学习行为；具体迁移目标见 [FEATURE_PARITY.md](FEATURE_PARITY.md)，实际测试范围见 [VERIFICATION.md](VERIFICATION.md)。
+当前版本 **0.8.0-beta.2**。采用 Electron、React 与受限桌面服务，迁移现有智云课程 API、时间线、重复课件、笔记及 AI 上下文模型。目标是保留鸿蒙版本的学习行为；具体迁移目标见 [FEATURE_PARITY.md](FEATURE_PARITY.md)，实际测试范围见 [VERIFICATION.md](VERIFICATION.md)。
 
 ## 安装
 
 目标系统为 Windows 10/11 的 64 位版本，不提供 Windows 7/8/8.1 或 32 位安装包。Electron 的 Windows 平台范围与架构说明见其[官方 README](https://github.com/electron/electron#platform-support)和[安装文档](https://www.electronjs.org/docs/latest/tutorial/installation)。
 
-1. 在本仓库 [Releases](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases) 下载与电脑架构一致的包。
-2. x64 用于 Intel/AMD 64 位电脑，ARM64 用于 Windows on ARM。Setup.exe 为当前用户安装，不要求先装 Node.js、DevEco Studio 或开发工具。
+1. 在[跨平台预览版](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/cross-platform-2026.11-preview)下载与电脑架构一致的 ZIP。
+2. x64 用于 Intel/AMD 64 位电脑，ARM64 用于 Windows on ARM。当前预览版提供 ZIP，不要求先装 Node.js、DevEco Studio 或开发工具。
 3. ZIP 需完整解压后打开其中的智云助手程序，保留同目录的运行时和资源文件。ZIP 仍使用系统用户的数据目录，不是把资料保存在压缩包旁的便携数据模式。
 4. 首次阅读隐私说明，然后通过浙江大学官方登录窗口登录智云课堂。验证码、二次认证等由用户在官方页面完成。
 
@@ -21,7 +21,7 @@ AI 功能需要用户自行配置个人 DeepSeek API。
 PowerShell 校验示例（文件名以当前 Release 为准）：
 
 ~~~powershell
-Get-FileHash '.\ZhiyunAssistant-0.8.0-beta.1-Windows-x64-Setup.exe' -Algorithm SHA256
+Get-FileHash '.\ZhiyunAssistant-Windows-0.8.0-beta.2-x64.zip' -Algorithm SHA256
 ~~~
 
 ## 日常学习
