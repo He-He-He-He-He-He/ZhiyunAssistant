@@ -150,7 +150,7 @@ export class LocalStore implements PermissionStorage {
     });
     if (failed) throw new Error('部分运行文件正在使用，稍后可继续清理');
   }
-  clearAllCaches(): void { this.cancel(); ['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip'].forEach((kind: string) => this.cache.clear(kind)); this.cache.clearTransient(); this.cropResults.clear(); this.checkedImages.clear(); let failed = false; ['catalogue', 'legacy', 'runtime', 'assistant'].forEach((kind: string) => { try { this.clearExtraCaches(kind); } catch (_) { failed = true; } }); if (['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip'].some((kind: string) => this.cache.bytes(kind) > 0)) failed = true; if (failed) throw new Error('部分缓存未能清理'); }
+  clearAllCaches(): void { this.cancel(); ['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip', 'knowledge'].forEach((kind: string) => this.cache.clear(kind)); this.cache.clearTransient(); this.cropResults.clear(); this.checkedImages.clear(); let failed = false; ['catalogue', 'legacy', 'runtime', 'assistant'].forEach((kind: string) => { try { this.clearExtraCaches(kind); } catch (_) { failed = true; } }); if (['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip', 'knowledge'].some((kind: string) => this.cache.bytes(kind) > 0)) failed = true; if (failed) throw new Error('部分缓存未能清理'); }
   private writeJson(name: string, value: string): void {
     if (!/^[A-Za-z0-9._-]+$/.test(name) || name.includes('..')) throw new Error('保存名称无效');
     if (catalogueCacheFile(name) && !this.catalogueCacheEnabled()) { this.metadataTransient.set(name, value); return; }

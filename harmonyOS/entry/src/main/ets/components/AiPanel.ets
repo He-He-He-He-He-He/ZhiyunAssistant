@@ -1,3 +1,5 @@
+import { KnowledgeJobs } from '../services/KnowledgeJobs';
+import { PriorLesson } from '../model/CourseContext';
 import { ReturnAction } from './ReturnAction';
 import { questionScope } from '../model/QuestionScope';
 import { NativeSelections } from '../model/NativeSelections';
@@ -150,6 +152,12 @@ export struct AiPanel {
       } finally { streamFinished = true; clearInterval(reveal); }
       if (gen !== this.epoch) return;
       render(answer, true);
+      const ownerStore = this.store, currentCourse = ownerStore?.activeCourse;
+      const incomplete = context.lines.some((line: Transcript): boolean => line.timing === 'source' || line.timing === 'received') && !context.lines.some((line: Transcript): boolean => line.timing === 'history');
+      if (ownerStore && currentCourse && whole && usedWhole && currentCourse.end > 0 && currentCourse.end <= Date.now() / 1000 && context.slides.length && context.lines.length && !incomplete) {
+        const material: PriorLesson = { course: currentCourse, slides: context.slides.slice(), lines: context.lines.slice(), gaps: [] };
+        KnowledgeJobs.schedule(ownerStore, [material], this.model, (): boolean => this.store === ownerStore, (): void => { this.getUIContext().getPromptAction().showToast({ message: '正在后台建立课程知识索引，将使用个人 AI 额度', duration: 2500 }); }, mode === 'always');
+      }
       setTimeout((): void => { if (gen === this.epoch) this.scroller.scrollEdge(Edge.Bottom); }, 32);
     } catch (err) { if (gen === this.epoch) this.error = (err as Error).message; }
     finally { if (gen === this.epoch) { this.busy = false; this.progress = ''; } }

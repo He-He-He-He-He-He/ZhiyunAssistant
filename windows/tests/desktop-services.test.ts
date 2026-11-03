@@ -278,3 +278,14 @@ test('assistant uses the real streaming transport for thinking and tool calls', 
  try {const result=await client.assistantTurn({} as any,'deepseek-flash',[{role:'user',content:'返回'}],[],()=>{});assert.equal(result.reasoning_content,'reason');assert.equal(result.calls[0].function.name,'app_do');assert.equal(JSON.parse(result.calls[0].function.arguments).action,'back');assert.equal(url,'https://api.deepseek.com/chat/completions');}
  finally {client.cancel();AiClient.savedKey=saved;cleanup();}
 });
+
+test('knowledge indexing is disabled by default, announces personal API use, and cancels when disabled',async()=>{
+ const {root,cleanup}=fixture(),events:any[]=[],backend=createServices(sessionFixture(root,async url=>apiFixture(url)),root,(name,value)=>events.push([name,value]),securityAdapters);
+ const oldAsk=AiClient.prototype.ask,oldBuild=AiClient.prototype.buildKnowledge,oldCached=AiClient.prototype.cachedKnowledge;let builds=0,activeAtEnd=true,release!:()=>void,started!:()=>void;const entered=new Promise<void>(resolve=>started=resolve);
+ AiClient.prototype.ask=async()=> '合成回答';AiClient.prototype.cachedKnowledge=async()=>null;AiClient.prototype.buildKnowledge=async(_store,_material,_model,valid)=>{builds++;started();await new Promise<void>(resolve=>release=resolve);activeAtEnd=valid();return false};
+ try {await backend.handle('session.restore');const opts={requestId:'q1',course,kind:'question',question:'概括',whole:true,slides:[{id:'p',t:0,url:'https://example.invalid/a'}],lines:[{id:'l',t:1,text:'测试'}]};
+  await backend.handle('ai.start',opts);await new Promise(resolve=>setTimeout(resolve,10));assert.equal(builds,0);
+  await backend.handle('cache.toggle',{kind:'knowledge',enabled:true});await backend.handle('ai.start',{...opts,requestId:'q2'});await entered;assert.equal(builds,1);assert.ok(events.some(([name,value])=>name==='notice'&&String(value).includes('个人 AI 额度')));
+  await backend.handle('cache.toggle',{kind:'knowledge',enabled:false});release();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(activeAtEnd,false);
+ }finally{AiClient.prototype.ask=oldAsk;AiClient.prototype.buildKnowledge=oldBuild;AiClient.prototype.cachedKnowledge=oldCached;release?.();await backend.dispose();cleanup()}
+});

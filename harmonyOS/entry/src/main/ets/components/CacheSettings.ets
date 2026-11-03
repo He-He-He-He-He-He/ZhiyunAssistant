@@ -1,3 +1,4 @@
+import { KnowledgeJobs } from '../services/KnowledgeJobs';
 import { ExtraCacheEntry } from '../model/CacheInventory';
 import { webview } from '@kit.ArkWeb';
 import { LocalStore } from '../services/LocalStore';
@@ -12,11 +13,11 @@ export struct CacheSettings {
   @State extraRows: ExtraCacheEntry[] = [];
   private extraKind(): boolean { return ['catalogue', 'legacy', 'runtime', 'assistant'].includes(this.category); }
   private extraLabel(kind: string): string { return kind === 'catalogue' ? '课表与访问状态' : kind === 'legacy' ? '历史遗留缓存' : kind === 'assistant' ? '应用助手对话' : '网页资源与临时文件'; }
-  private explanation(kind: string): string { return kind === 'slides' ? '已浏览课件原图、去黑边图片和重复页识别数据' : kind === 'transcript' ? '回放转写与本机收到的直播转写' : kind === 'video' ? '在线播放产生的视频片段，不含离线下载' : kind === 'chat' ? '每节课的问答历史及回答中的引用信息' : kind === 'summary' ? '各页速览回答、历史版本和阅读位置' : kind === 'vision' ? 'AI 读过的课件文字、公式和图表，供多个功能复用' : kind === 'smartSkip' ? 'AI 判断杂音、课间等可跳过片段的结果' : kind === 'assistant' ? '应用助手的历史对话，不含每节课的课程问答' : kind === 'catalogue' ? '课表、搜索结果、课次目录和权限核验记录' : kind === 'legacy' ? '旧版或其他账号留下的普通缓存，不含笔记和离线课程' : '网页内核资源、应用运行临时文件；使用中可能重新产生'; }
+  private explanation(kind: string): string { return kind === 'knowledge' ? '开启后后台使用个人 AI 生成摘要，可能产生费用；按需回查原文，要求结合课件时才使用已识图内容' : kind === 'slides' ? '已浏览课件原图、去黑边图片和重复页识别数据' : kind === 'transcript' ? '回放转写与本机收到的直播转写' : kind === 'video' ? '在线播放产生的视频片段，不含离线下载' : kind === 'chat' ? '每节课的问答历史及回答中的引用信息' : kind === 'summary' ? '各页速览回答、历史版本和阅读位置' : kind === 'vision' ? 'AI 读过的课件文字、公式和图表，供多个功能复用' : kind === 'smartSkip' ? 'AI 判断杂音、课间等可跳过片段的结果' : kind === 'assistant' ? '应用助手的历史对话，不含每节课的课程问答' : kind === 'catalogue' ? '课表、搜索结果、课次目录和权限核验记录' : kind === 'legacy' ? '旧版或其他账号留下的普通缓存，不含笔记和离线课程' : '网页内核资源、应用运行临时文件；使用中可能重新产生'; }
   private byteLabel(bytes: number): string { return bytes >= 1073741824 ? (bytes / 1073741824).toFixed(2) + ' GB' : bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + ' MB' : Math.ceil(bytes / 1024) + ' KB'; }
   @State revision: number = 0;
   @State error: string = '';
-  private enable(kind: string, value: boolean): void { try { this.store?.cache.setEnabled(kind, value); this.error = ''; } catch (_) { this.error = '未能保存设置，请检查本机可用空间'; } this.update(); }
+  private enable(kind: string, value: boolean): void { if (kind === 'knowledge' && !value) KnowledgeJobs.cancel(); try { this.store?.cache.setEnabled(kind, value); this.error = ''; } catch (_) { this.error = '未能保存设置，请检查本机可用空间'; } this.update(); }
   @State category: string = '';
   @State folderId: string = '';
   @State selected: string[] = [];
@@ -26,8 +27,8 @@ export struct CacheSettings {
   private storageSize(kind: string, subId: string = ''): string { const bytes = this.store?.cache.bytes(kind, subId ? [subId] : []) || 0; return bytes >= 1073741824 ? (bytes / 1073741824).toFixed(2) + ' GB' : (bytes / 1048576).toFixed(1) + ' MB'; }
   private systemBack(): void { if (this.backSequence > 0) this.back(); }
   private back(): void { if (this.folderId) this.folderId = ''; else if (this.category) { this.category = ''; this.selected = []; } else this.onClose(); }
-  private clear(kind: string, ids: string[] = []): void { this.store?.cache.clear(kind, ids); this.selected = []; this.update(); }
-  private clearAll(): void { try { webview.WebviewController.removeAllCache(true); this.store?.clearAllCaches(); this.selected = []; this.error = ''; } catch (_) { this.error = '部分缓存未能清理，请重试'; } finally { this.onAssistantCleared(); } this.update(); }
+  private clear(kind: string, ids: string[] = []): void { if (kind === 'knowledge') KnowledgeJobs.cancel(); this.store?.cache.clear(kind, ids); this.selected = []; this.update(); }
+  private clearAll(): void { KnowledgeJobs.cancel(); try { webview.WebviewController.removeAllCache(true); this.store?.clearAllCaches(); this.selected = []; this.error = ''; } catch (_) { this.error = '部分缓存未能清理，请重试'; } finally { this.onAssistantCleared(); } this.update(); }
   private clearExtras(kind: string, ids: string[] = []): void { try { if (kind === 'runtime') webview.WebviewController.removeAllCache(true); this.store?.clearExtraCaches(kind, ids); this.selected = []; this.error = ''; } catch (_) { this.error = '部分运行文件正在使用，稍后可继续清理'; } finally { if (kind === 'assistant') this.onAssistantCleared(); } this.update(); }
   build() {
     Column({ space: 12 }) {

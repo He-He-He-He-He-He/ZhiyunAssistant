@@ -1,3 +1,4 @@
+import { KnowledgeJobs } from '../services/KnowledgeJobs';
 import { ExpandedSlide } from '../components/ExpandedSlide';
 import { AppAssistant } from '../components/AppAssistant';
 import { ChatStore } from '../services/ChatStore';
@@ -401,7 +402,7 @@ struct Index {
     clearTimeout(this.authTimer); clearTimeout(this.authRetry); this.screen = 'home'; this.resume();
   }
   aboutToDisappear(): void { this.saveProgress(true); this.stopGravity(); this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); this.stop(); }
-  private visibilityChanged(): void { this.rotationWatch(); if (this.foreground) this.resume(); else { this.saveProgress(true); this.playback.pause(); this.library?.pause(); this.stop(); } }
+  private visibilityChanged(): void { this.rotationWatch(); if (this.foreground) this.resume(); else { KnowledgeJobs.cancel(); this.saveProgress(true); this.playback.pause(); this.library?.pause(); this.stop(); } }
   private stop(): void {
     this.cancelCameraProbe();
     if (this.course && this.screen === 'lesson' && !this.offlineViewing && !this.demo) { try { this.store?.save({ course: this.course, slides: this.slides, lines: this.lines, savedAt: Date.now() }); } catch (_) {} }
@@ -709,6 +710,7 @@ struct Index {
     this.stop(); this.demo = false; this.screen = 'home'; this.course = undefined; this.slides = []; this.groups = []; this.lines = []; this.imageUris = {}; this.message = ''; this.catalogAt = 0; this.forcePermissionRefresh = true; this.tick();
   }
   private async logout(): Promise<void> {
+    KnowledgeJobs.cancel();
     this.closeMedia(); this.library?.pause(); this.offlineViewing = false; this.offlineOpen = false;
     this.stop(); webview.WebCookieManager.clearAllCookiesSync(); await SessionStore.clear();
     this.api.usePermissionStorage(undefined); this.trimBorders = false;

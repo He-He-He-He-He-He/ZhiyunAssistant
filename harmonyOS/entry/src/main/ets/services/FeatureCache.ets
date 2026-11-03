@@ -1,9 +1,9 @@
 import { fileIo as fs } from '@kit.CoreFileKit';
 import { Course } from '../model/Timeline';
 export interface CacheEntry { category: string; course: Course; files: string[]; savedAt: number }
-interface CachePreferences { slides?: boolean; transcript?: boolean; video?: boolean; chat?: boolean; summary?: boolean; smartSkip?: boolean; vision?: boolean }
-export const CACHE_KINDS: string[] = ['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip'];
-export function cacheLabel(kind: string): string { return kind === 'slides' ? '课件' : kind === 'transcript' ? '转写' : kind === 'video' ? '视频' : kind === 'chat' ? '课程问答' : kind === 'smartSkip' ? '无效内容识别记录' : kind === 'vision' ? '课件文字与图表识别' : '本页速览'; }
+interface CachePreferences { slides?: boolean; transcript?: boolean; video?: boolean; chat?: boolean; summary?: boolean; smartSkip?: boolean; vision?: boolean; knowledge?: boolean }
+export const CACHE_KINDS: string[] = ['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip', 'knowledge'];
+export function cacheLabel(kind: string): string { return kind === 'knowledge' ? '课程知识索引' : kind === 'slides' ? '课件' : kind === 'transcript' ? '转写' : kind === 'video' ? '视频' : kind === 'chat' ? '课程问答' : kind === 'smartSkip' ? '无效内容识别记录' : kind === 'vision' ? '课件文字与图表识别' : '本页速览'; }
 export function cacheHash(value: string): string { let a = 2166136261, b = 5381; for (let i = 0; i < value.length; i++) { a = Math.imul(a ^ value.charCodeAt(i), 16777619); b = Math.imul(b, 33) ^ value.charCodeAt(i); } return (a >>> 0).toString(16) + (b >>> 0).toString(16); }
 export class FeatureCache {
   private root: string;
@@ -17,7 +17,7 @@ export class FeatureCache {
   private revisions: Map<string, number> = new Map();
   constructor(root: string) { this.root = root; try { this.entries = JSON.parse(fs.readTextSync(root + '/cache-index-v1.json')) as CacheEntry[]; } catch (_) {} try { this.preferences = JSON.parse(fs.readTextSync(root + '/cache-preferences.json')) as CachePreferences; } catch (_) {} }
   private write(name: string, text: string): void { const file = fs.openSync(this.root + '/' + name + '.tmp', fs.OpenMode.CREATE | fs.OpenMode.WRITE_ONLY | fs.OpenMode.TRUNC); try { fs.writeSync(file.fd, text); } finally { fs.closeSync(file); } fs.renameSync(this.root + '/' + name + '.tmp', this.root + '/' + name); }
-  enabled(category: string): boolean { return (this.preferences as Record<string, boolean>)[category] !== false; }
+  enabled(category: string): boolean { const value = (this.preferences as Record<string, boolean>)[category]; return category === 'knowledge' ? value === true : value !== false; }
   setEnabled(category: string, enabled: boolean): void { this.revisions.set(category, this.revision(category) + 1); (this.preferences as Record<string, boolean>)[category] = enabled; this.write('cache-preferences.json', JSON.stringify(this.preferences)); }
   revision(category: string): number { return this.revisions.get(category) || 0; }
   file(category: string, course: Course, name: string): string { const directory = this.root + '/resource-cache/' + category + '/' + cacheHash(course.subId); if (!fs.accessSync(directory)) fs.mkdirSync(directory, true); return directory + '/' + name; }

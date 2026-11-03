@@ -22,7 +22,7 @@ import { LearningProgress, readLearningProgress, readTranscriptProgressAnchor } 
 import { LessonNote } from '../shared/model/Notes';
 import { MediaSource, mediaUrl } from '../shared/model/Media';
 import { PageSummaryRecord } from '../shared/model/SummaryPolicy';
-import { PriorCourseContext } from '../shared/model/CourseContext';
+import { PriorCourseContext, PriorLesson } from '../shared/model/CourseContext';
 import type { LessonData } from '../shared/bridge';
 
 type Emit = (event: string, value: any) => void;
@@ -47,7 +47,10 @@ export function createServices(session: Session, userData: string, emit: Emit, a
   const assistantScanners = new Map<string, Zhiyun>(), cancelledAssistantRequests = new Set<string>();
   function rememberAssistantCancellation(id: string): void { if (!/^(assistant|history)-[a-zA-Z0-9_-]{1,100}$/.test(id)) return; cancelledAssistantRequests.add(id); if (cancelledAssistantRequests.size > 1024) cancelledAssistantRequests.delete(cancelledAssistantRequests.values().next().value!); }
   let account: Account | undefined, store: LocalStore | undefined, downloads: OfflineLibrary | undefined, lesson: LessonData | undefined;
-  let catalogueEpoch = 0, accountEpoch = 0, sessionClosing: Promise<void> | undefined;
+  let catalogueEpoch = 0, accountEpoch = 0, knowledgeEpoch = 0, sessionClosing: Promise<void> | undefined;
+  const knowledgeJobs = new Set<string>();
+  let knowledgeChain: Promise<void> = Promise.resolve();
+  function cancelKnowledge(): void { knowledgeEpoch++; for (const [id,client] of clients) if (id.startsWith('knowledge-')) { client.cancel(); clients.delete(id); } knowledgeJobs.clear(); }
   let lessonEpoch = 0, liveTimer: ReturnType<typeof setTimeout> | undefined, historyPromise: Promise<any> | undefined;
   let lessonRefresh: Promise<LessonData> | undefined;
   let liveEmitTimer: ReturnType<typeof setTimeout> | undefined, lastLivePersist = 0; const pendingLive = new Map<string, Transcript>();
@@ -55,7 +58,7 @@ export function createServices(session: Session, userData: string, emit: Emit, a
   function requiredStore(): LocalStore { if (!store || !account) throw new Error('请先登录智云课堂'); return store; }
   function bind(value: Account): Account {
     if (account?.id !== value.id || !store) {
-      closeLesson(); resources.clear(); nativeBridge().sync('resource.clear'); displayedImages.clear(); resourceKeys.clear(); downloads?.pause(); api.cancel(); liveSocket.close(); smartSkip.cancel(); clients.forEach(client => client.cancel()); clients.clear(); assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); contextLoaders.forEach(loader => loader.cancel()); contextLoaders.clear(); store?.cache.flush();
+      cancelKnowledge(); closeLesson(); resources.clear(); nativeBridge().sync('resource.clear'); displayedImages.clear(); resourceKeys.clear(); downloads?.pause(); api.cancel(); liveSocket.close(); smartSkip.cancel(); clients.forEach(client => client.cancel()); clients.clear(); assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); contextLoaders.forEach(loader => loader.cancel()); contextLoaders.clear(); store?.cache.flush();
       account = value; store = new LocalStore(context, value.id); api.usePermissionStorage(store); collections.bind(store); void nativeBridge().call('app.cachePolicy', { enabled: store.runtimeCacheEnabled() }).catch(() => {});
       downloads = new OfflineLibrary(store, (progressOnly) => emit('downloads', progressOnly ? { taskUpdates: downloads?.progressTasks() || [], concurrency: downloads?.concurrency() || 1 } : { entries: downloads?.list() || [], tasks: downloads?.tasks() || [], concurrency: downloads?.concurrency() || 1 }));
     } else account = value;
@@ -170,6 +173,21 @@ export function createServices(session: Session, userData: string, emit: Emit, a
   async function priorContext(course: Course, whole: boolean, status: (message: string) => void, requestId: string): Promise<PriorCourseContext> {
     const loader = new CourseContextLoader(); contextLoaders.set(requestId, loader); try { return await loader.load(course, requiredStore(), lesson?.offline === true, downloads?.list().map(item => downloads!.snapshot(item.course.subId)).filter((value): value is Snapshot => !!value) || [], status, whole); } finally { loader.cancel(); if (contextLoaders.get(requestId) === loader) contextLoaders.delete(requestId); }
   }
+  function queueKnowledge(currentStore: LocalStore, materials: PriorLesson[], model: string, includeVision: boolean): void {
+    if (!currentStore.cache.enabled('knowledge') || !materials.length) return;
+    const owner=account?.id, epoch=knowledgeEpoch, valid=() => !!owner && account?.id===owner && store===currentStore && knowledgeEpoch===epoch && currentStore.cache.enabled('knowledge');
+    const run = async (): Promise<void> => { let notified=false;
+      for (const material of materials) { if (!valid()) return; if (material.gaps.length || !material.lines.length) continue;
+        const id='knowledge-'+key(owner+':'+material.course.subId+':'+String(includeVision)); if (knowledgeJobs.has(id)) continue; knowledgeJobs.add(id);
+        const worker=new AiClient(); clients.set(id,worker);
+        try { if (await worker.cachedKnowledge(currentStore,material,includeVision) || !valid()) continue;
+          if (!notified) { emit('notice','正在后台建立课程知识索引，将使用个人 AI 额度'); notified=true; }
+          await worker.buildKnowledge(currentStore,material,model,valid,includeVision);
+        } catch (_) { /* Full source remains available; a later request can retry. */ }
+        finally { worker.cancel(); if (clients.get(id)===worker) { clients.delete(id); knowledgeJobs.delete(id); } }
+      }
+    }; knowledgeChain = knowledgeChain.then(run).catch(() => {});
+  }
   async function startAi(payload: any): Promise<any> {
     const requestId = validName(payload.requestId), currentStore = requiredStore(), course = checkedCourse(payload.course); currentStore.useCourse(course);
     if (clients.has(requestId)) throw new Error('请求已在处理');
@@ -184,6 +202,11 @@ export function createServices(session: Session, userData: string, emit: Emit, a
       if (payload.kind === 'summary') question = '请用简洁中文概括当前这页的实际知识与老师讲解，帮助我迅速理解这一页。说明与已学内容的联系及它在课程中的作用；没有新知识不必强行列新增点。不要描述页面左侧右侧等无助于学习的布局，不写冗余免责声明。保留可点击的讲解时间引用；引用其他课次时每个时间点分别引用，不把多个时间合并到同一个链接。';
       if (!question.trim()) throw new Error('请输入问题');
       const answer = await client.ask(currentStore, slides, lines, question, at, whole, payload.model || currentStore.readJson('ai-model.txt') || 'deepseek-flash', payload.history || [], status, payload.kind === 'summary' ? 'always' : payload.mode || 'auto', payload.currentId || payload.pageId || '', changed, payload.selectedIds || (payload.kind === 'summary' && scope === 'page' ? [payload.currentId || payload.pageId].filter(Boolean) : []), prior, async () => { const saved = currentStore.load(course.subId); return { slides: saved?.slides || slides, lines: saved?.lines || lines }; }, undefined, payload.kind === 'summary' ? undefined : payload.viewingMode === 'reading' ? 'reading' : 'playback');
+      if (['question', 'summary'].includes(payload.kind) && (whole || prior)) {
+        const materials: PriorLesson[] = prior ? prior.lessons.slice() : [];
+        if (whole && !lesson?.live && course.end > 0 && course.end <= Date.now()/1000 && slides.length && lines.length && !(lines.some(line => line.timing === 'source' || line.timing === 'received') && !lines.some(line => line.timing === 'history'))) materials.push({course,slides:slides.slice(),lines:lines.slice(),gaps:[]});
+        queueKnowledge(currentStore,materials,payload.model || currentStore.readJson('ai-model.txt') || 'deepseek-flash',payload.kind === 'summary' || payload.mode === 'always');
+      }
       const references = prior?.lessons.map(item => item.course) || [];
       if (payload.kind === 'summary') {
         if (currentStore.cache.revision('summary') !== startedSummaryRevision) { emit('ai.stream', { requestId, text: answer, done: true }); return { answer, references }; }
@@ -220,6 +243,7 @@ export function createServices(session: Session, userData: string, emit: Emit, a
       }
       case 'session.account': { if (sessionClosing) await sessionClosing; const gen = accountEpoch; await SessionStore.refresh(); const value = await api.account(); if (gen !== accountEpoch) throw new Error('登录操作已取消'); bind(value); await SessionStore.rememberAccount(value); if (gen !== accountEpoch) throw new Error('登录操作已取消'); await SessionStore.saveCurrent(); if (gen !== accountEpoch) throw new Error('登录操作已取消'); return value; }
       case 'session.logout': {
+        cancelKnowledge();
         if (!sessionClosing) { accountEpoch++; sessionClosing = (async () => { closeLesson(); downloads?.pause(); clients.forEach(client => client.cancel()); clients.clear(); assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); contextLoaders.forEach(loader => loader.cancel()); contextLoaders.clear(); api.cancel(); store?.cache.flush(); await SessionStore.clear(); account = undefined; store = undefined; downloads = undefined; resources.clear(); nativeBridge().sync('resource.clear'); displayedImages.clear(); resourceKeys.clear(); collections.bind(undefined); })().finally(() => { sessionClosing = undefined; }); }
         await sessionClosing; return null;
       }
@@ -255,7 +279,7 @@ export function createServices(session: Session, userData: string, emit: Emit, a
       case 'ai.settings': { const currentStore = requiredStore(), personal = !!await AiClient.personalKey(); return { configured: personal, personalReady: personal, provider: personal ? 'personal' : '', model: currentStore.readJson('ai-model.txt') || 'deepseek-flash', models: readObject(currentStore.readJson('ai-models.json'), ['deepseek-flash','deepseek-v4-pro']), usage: AiClient.usage(currentStore) }; }
       case 'ai.models': { const secret = await AiClient.savedKey(); if (!secret) return []; const client = new AiClient(); try { const models = await client.models(secret); requiredStore().saveJson('ai-models.json', JSON.stringify(models)); return models; } finally { client.cancel(); } }
       case 'ai.saveKey': { const currentStore = requiredStore(), value = String(payload.key || '').trim(); if (!/^sk-[A-Za-z0-9_-]{16,200}$/.test(value)) throw new Error('请输入有效的 DeepSeek API 密钥'); const verifier = new AiClient(); let models: string[]; try { models = await verifier.models(value); if (!models.length) throw new Error('API 未提供可用模型'); } finally { verifier.cancel(); } await AiClient.saveKey(value); currentStore.saveJson('ai-models.json', JSON.stringify(models)); const model = models.includes(payload.model) ? payload.model : models.includes(currentStore.readJson('ai-model.txt')) ? currentStore.readJson('ai-model.txt') : models.includes('deepseek-flash') ? 'deepseek-flash' : models[0]; currentStore.saveJson('ai-model.txt', model); emit('ai.settings', { configured: true, model, models }); return { configured: true, model, models }; }
-      case 'ai.deleteKey': contextLoaders.forEach(loader => loader.cancel()); clients.forEach(client => client.cancel()); await AiClient.clearKey(); emit('ai.settings', { configured: false }); return { configured: false };
+      case 'ai.deleteKey': cancelKnowledge(); contextLoaders.forEach(loader => loader.cancel()); clients.forEach(client => client.cancel()); await AiClient.clearKey(); emit('ai.settings', { configured: false }); return { configured: false };
       case 'ai.chatSessions': { const currentStore = requiredStore(); currentStore.useCourse(checkedCourse(payload.course)); return new ChatStore(currentStore).list(); }
       case 'ai.saveChat': { const currentStore = requiredStore(); currentStore.useCourse(checkedCourse(payload.course)); new ChatStore(currentStore).save(payload.session); return null; }
       case 'ai.deleteChat': { const currentStore = requiredStore(); currentStore.useCourse(checkedCourse(payload.course)); new ChatStore(currentStore).delete(payload.id); return null; }
@@ -325,9 +349,9 @@ export function createServices(session: Session, userData: string, emit: Emit, a
       case 'download.concurrency': requiredStore(); if (payload.count !== undefined) downloads!.setConcurrency(Number(payload.count)); return downloads!.concurrency();
       case 'cache.list': { const currentStore = requiredStore(), browserEntries = await browserCacheEntries(); return CACHE_KINDS.map(kind => ({ kind, label: cacheLabel(kind), controllable: kind !== 'video', description: kind === 'video' ? '播放缓冲随播放器释放；持久视频由离线下载单独保留' : undefined, enabled: currentStore.cache.enabled(kind), bytes: currentStore.cache.bytes(kind), count: currentStore.cache.list(kind).length })).concat([{ kind: 'assistant', label: '应用助手对话', controllable: true, description: '应用助手的历史对话，不含每节课的课程问答', enabled: currentStore.assistantCacheEnabled(), bytes: currentStore.extraCaches('assistant').reduce((n, entry) => n + entry.bytes, 0), count: currentStore.extraCaches('assistant').length }, { kind: 'catalogue', label: '课程目录与权限记录', controllable: true, description: undefined, enabled: currentStore.catalogueCacheEnabled(), bytes: currentStore.extraCaches('catalogue').reduce((n, entry) => n + entry.bytes, 0), count: currentStore.extraCaches('catalogue').length }, { kind: 'runtime', label: '网页与运行临时文件', controllable: true, description: undefined, enabled: currentStore.runtimeCacheEnabled(), bytes: currentStore.extraCaches('runtime').reduce((n, entry) => n + entry.bytes, 0) + browserEntries.reduce((n, entry) => n + entry.bytes, 0), count: currentStore.extraCaches('runtime').length + browserEntries.length }]); }
       case 'cache.detail': { const currentStore = requiredStore(); if (CACHE_KINDS.includes(payload.kind)) return currentStore.cache.list(payload.kind).map(entry => ({ ...entry, bytes: currentStore.cache.bytes(payload.kind, [entry.course.subId]) })); const entries = currentStore.extraCaches(payload.kind).map(({ paths, ...entry }) => ({ ...entry, title: entry.label })); if (payload.kind === 'runtime') entries.push(...(await browserCacheEntries()).map(({ path, ...entry }) => ({ ...entry, title: entry.label, protected: false }))); return entries; }
-      case 'cache.toggle': { const currentStore = requiredStore(); if (payload.kind === 'assistant') currentStore.setAssistantCacheEnabled(payload.enabled); else if (payload.kind === 'catalogue') currentStore.setCatalogueCacheEnabled(payload.enabled); else if (payload.kind === 'runtime') { await nativeBridge().call('app.cachePolicy', { enabled: payload.enabled !== false }); currentStore.setRuntimeCacheEnabled(payload.enabled); } else if (CACHE_KINDS.includes(payload.kind)) currentStore.cache.setEnabled(payload.kind, payload.enabled); else throw new Error('缓存分类无效'); return null; }
-      case 'cache.clear': { const currentStore = requiredStore(); if (payload.kind === 'catalogue') { catalogueEpoch++; assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); api.cancel(); api.usePermissionStorage(undefined); api.usePermissionStorage(currentStore); } if (CACHE_KINDS.includes(payload.kind)) currentStore.cache.clear(payload.kind, payload.subIds || payload.ids || []); else if (['runtime', 'catalogue', 'legacy', 'assistant'].includes(payload.kind)) currentStore.clearExtraCaches(payload.kind, payload.ids || []); else throw new Error('缓存分类无效'); if (payload.kind === 'runtime') await clearBrowserCaches(payload.ids || []); if (payload.kind === 'assistant') emit('assistant.historyCleared', {}); return null; }
-      case 'cache.clearAll': catalogueEpoch++; assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); api.cancel(); api.usePermissionStorage(undefined); api.usePermissionStorage(requiredStore()); requiredStore().clearAllCaches(); emit('assistant.historyCleared', {}); await clearBrowserCaches(); return null;
+      case 'cache.toggle': { const currentStore = requiredStore(); if (payload.kind === 'knowledge' && payload.enabled !== true) cancelKnowledge(); if (payload.kind === 'assistant') currentStore.setAssistantCacheEnabled(payload.enabled); else if (payload.kind === 'catalogue') currentStore.setCatalogueCacheEnabled(payload.enabled); else if (payload.kind === 'runtime') { await nativeBridge().call('app.cachePolicy', { enabled: payload.enabled !== false }); currentStore.setRuntimeCacheEnabled(payload.enabled); } else if (CACHE_KINDS.includes(payload.kind)) currentStore.cache.setEnabled(payload.kind, payload.enabled); else throw new Error('缓存分类无效'); return null; }
+      case 'cache.clear': { const currentStore = requiredStore(); if (payload.kind === 'knowledge') cancelKnowledge(); if (payload.kind === 'catalogue') { catalogueEpoch++; assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); api.cancel(); api.usePermissionStorage(undefined); api.usePermissionStorage(currentStore); } if (CACHE_KINDS.includes(payload.kind)) currentStore.cache.clear(payload.kind, payload.subIds || payload.ids || []); else if (['runtime', 'catalogue', 'legacy', 'assistant'].includes(payload.kind)) currentStore.clearExtraCaches(payload.kind, payload.ids || []); else throw new Error('缓存分类无效'); if (payload.kind === 'runtime') await clearBrowserCaches(payload.ids || []); if (payload.kind === 'assistant') emit('assistant.historyCleared', {}); return null; }
+      case 'cache.clearAll': cancelKnowledge(); catalogueEpoch++; assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); api.cancel(); api.usePermissionStorage(undefined); api.usePermissionStorage(requiredStore()); requiredStore().clearAllCaches(); emit('assistant.historyCleared', {}); await clearBrowserCaches(); return null;
       case 'collection.get': requiredStore(); return payload.kind ? collections.entries(payload.kind) : { favorite: collections.entries('favorite'), later: collections.entries('later') };
       case 'collection.toggle': { requiredStore(); if (!['favorite', 'favourite', 'later'].includes(payload.kind)) throw new Error('收藏类型无效'); if (payload.selection) collections.toggleSelection(payload.kind,payload.course,payload.known||payload.courses||[],payload.whole===true); else if (payload.whole) collections.toggleCourse(payload.kind, payload.course, payload.known || payload.courses || []); else collections.toggleLesson(payload.kind, checkedCourse(payload.course)); return collections.entries(payload.kind); }
       case 'collection.clear': requiredStore(); collections.clear(payload.kind); return [];
@@ -355,6 +379,6 @@ export function createServices(session: Session, userData: string, emit: Emit, a
       if (foreground && generation === lessonEpoch) scheduleLive(generation);
     }
   }
-  async function dispose(): Promise<void> { assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); closeLesson(); await disposeImageJobs(); downloads?.pause(); contextLoaders.forEach(loader => loader.cancel()); clients.forEach(client => client.cancel()); api.cancel(); store?.cache.flush(); try { if (account) await SessionStore.saveCurrent(); } catch (_) {} }
+  async function dispose(): Promise<void> { cancelKnowledge(); assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); closeLesson(); await disposeImageJobs(); downloads?.pause(); contextLoaders.forEach(loader => loader.cancel()); clients.forEach(client => client.cancel()); api.cancel(); store?.cache.flush(); try { if (account) await SessionStore.saveCurrent(); } catch (_) {} }
   return { handle, resolveResource, dispose, lifecycle };
 }

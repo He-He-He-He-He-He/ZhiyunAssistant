@@ -1368,7 +1368,7 @@ test('historical raw resource failures preserve known content with explicit miss
 });
 test('cross-lesson AI receives every previous sentence and current context independently; image tools remain bound to the older lesson',async()=>{
  const {AiClient}=load('services/AiClient');AiClient.savedKey=async()=> 'fixture';const ai=new AiClient(),bodies=[],recognized=[],saves=[];
- const old={...course,subId:'prior',start:course.start-86400};const store={activeCourse:course,imageVersion:()=> 'v1',cache:{revision:()=>0,read:()=>'',save:(kind,c)=>saves.push(c.subId)}};
+ const old={...course,subId:'prior',start:course.start-86400};const store={activeCourse:course,imageVersion:()=> 'v1',cache:{enabled:()=>false,revision:()=>0,read:()=>'',save:(kind,c)=>saves.push(c.subId)}};
  ai.readSlideUncached=async(s,store,key,c)=>{recognized.push([s.id,c?.subId]);return{text:'图像证据',version:'v1'}};
  ai.stream=async(key,body)=>{bodies.push(body);return bodies.length===1?{answer:'',calls:[{id:'tool',type:'function',function:{name:'read_course_slides',arguments:JSON.stringify({lesson:1,pages:[1]})}}]}:{answer:'关联前序知识',calls:[]}};
  await ai.ask(store,[slide('current',0)],[{id:'current',t:1,text:'当前材料'}],'概括',20,false,'test',[],()=>{},'always','current',()=>{},[],{gaps:[],lessons:[{course:old,slides:[slide('prior-slide',0)],lines:[{id:'old',t:100,text:'全部历史证据'}],gaps:[]}]});
@@ -1674,7 +1674,7 @@ test('continuous playback lookup handles large timelines, equal timestamps and s
 });
 test('explicit logout from nested pages clears identity and navigation and hides offline entries immediately',async()=>{
  const source=fs.readFileSync(path.join(root,'pages/Index.ets'),'utf8'),start=source.indexOf('  private async logout('),end=source.indexOf('\n  }',start)+4,exports={};let cleared=0,cookies=0,paused=0;
- const code=ts.transpileModule('export class LogoutFixture {\n'+source.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText;vm.runInNewContext(code,{exports,SessionStore:{clear:async()=>cleared++},webview:{WebCookieManager:{clearAllCookiesSync:()=>cookies++}},clearTimeout});
+ const code=ts.transpileModule('export class LogoutFixture {\n'+source.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText;vm.runInNewContext(code,{exports,KnowledgeJobs:{cancel:()=>{}},SessionStore:{clear:async()=>cleared++},webview:{WebCookieManager:{clearAllCookiesSync:()=>cookies++}},clearTimeout});
  const p=new exports.LogoutFixture();Object.assign(p,{account:{id:'fixture'},course,screen:'lesson',plaza:true,allCoursesOpen:true,collectionPage:'later',notesLibrary:true,cacheSettings:true,downloadsOpen:true,lessonDownloadOpen:true,offlineViewing:true,offlineOpen:true,offlineEntries:[{course}],downloadJobs:[{}],courseReturnStack:[{}],authOfficial:true,authPassword:'temporary-fixture',library:{pause:()=>paused++},api:{usePermissionStorage:()=>{}},collections:{bind:()=>{}},closeMedia:()=>{},stop:()=>{}});await p.logout();assert.equal(cleared,1);assert.equal(cookies,1);assert.equal(paused,1);assert.equal(p.screen,'home');assert.equal(p.account,undefined);assert.equal(p.store,undefined);assert.equal(p.course,undefined);assert.equal(p.offlineEntries.length,0);for(const flag of ['plaza','allCoursesOpen','notesLibrary','cacheSettings','downloadsOpen','lessonDownloadOpen','offlineOpen','authOfficial'])assert.equal(p[flag],false,flag);assert.equal(p.courseReturnStack.length,0);assert.equal(p.authPassword,'');
 });
 
@@ -2244,3 +2244,26 @@ test('Harmony assistant can read every character of a long note in chunks',async
 });
 
 test('Harmony assistant does not report failed operations as successful',async()=>{const {AppAssistantRunner}=load('model/AppAssistant');let round=0;const answer=await new AppAssistantRunner().run('打开','a',()=> 'a',async()=>round++?{answer:'全部完成',reasoning:'',finishReason:'stop',calls:[]}:{answer:'',reasoning:'',finishReason:'tool_calls',calls:[{id:'one',type:'function',function:{name:'app_do',arguments:'{"action":"open"}'}}]},async()=>{throw new Error('没有权限')},()=>{},()=>{});assert.match(answer,/部分操作未完成/);});
+
+test('Harmony knowledge indexes invalidate changes and discard interrupted generation',async()=>{
+ const crypto=require('node:crypto');const stubs={'@kit.ArkTS':{util:{TextEncoder:class{encodeInto(s){return new TextEncoder().encode(s)}}}},'@kit.CryptoArchitectureKit':{cryptoFramework:{createMd(){let chunks=[];return{async update(b){chunks.push(Buffer.from(b.data))},async digest(){return{data:crypto.createHash('sha256').update(Buffer.concat(chunks)).digest()}}}}}}};
+ const k=load('model/KnowledgeCache',stubs);const slides=[slide('s1',0)],lines=[{id:'l',t:3,text:'原始讲解'}],rows=k.knowledgeRecords(slides,lines,{});const fingerprint=await k.knowledgeFingerprint(rows,slides,{});let active=true;
+ assert.equal(await k.createKnowledgeIndex(rows,slides,{},async()=>{active=false;return '摘要'},()=>active,{}),undefined);
+ const built=await k.createKnowledgeIndex(rows,slides,{},async()=> '知识摘要',()=>true,{});assert.equal(k.usableKnowledge(built,fingerprint,k.knowledgeChunks(rows)),true);
+ const changed=k.knowledgeRecords(slides,[{id:'l',t:3,text:'已改变的讲解'}],{});assert.notEqual(await k.knowledgeFingerprint(changed,slides,{}),fingerprint);
+});
+
+test('Harmony question reuses a verified index and retrieves original text when requested',async()=>{
+ const crypto=require('node:crypto');const stubs={'@kit.ArkTS':{util:{TextEncoder:class{encodeInto(s){return new TextEncoder().encode(s)}}}},'@kit.CryptoArchitectureKit':{cryptoFramework:{createMd(){let chunks=[];return{async update(b){chunks.push(Buffer.from(b.data))},async digest(){return{data:crypto.createHash('sha256').update(Buffer.concat(chunks)).digest()}}}}}}};
+ const {AiClient}=load('services/AiClient',stubs), client=new AiClient();AiClient.savedKey=async()=> 'synthetic-only';const files=new Map(),revision=0,localCourse={...course,subId:'index'},slides=[slide('s1',0)],lines=[{id:'l',t:3,text:'课堂完整原文'}],store={activeCourse:localCourse,imageVersion:()=>'',cache:{enabled:()=>true,revision:()=>revision,read:(kind,c,name)=>files.get(kind+':'+c.subId+':'+name)||'',save:(kind,c,name,text)=>files.set(kind+':'+c.subId+':'+name,text)}};
+ client.stream=async()=>({answer:'合成索引',finishReason:'stop',calls:[]});assert.equal(await client.buildKnowledge(store,{course:localCourse,slides,lines,gaps:[]},'deepseek-flash',()=>true),true);
+ const sent=[];client.stream=async(_key,body)=>{sent.push(JSON.parse(JSON.stringify(body)));return sent.length===1?{answer:'',calls:[{id:'read',function:{name:'read_course_context',arguments:'{"scope":"whole"}'}}]}:{answer:'完成',calls:[]}};
+ await client.ask(store,slides,lines,'总结整节课',20,true,'deepseek-flash',[],()=>{},'auto','s1',()=>{},[],undefined,async()=>({slides,lines}));assert.match(JSON.stringify(sent[0].messages),/合成索引/);assert.doesNotMatch(JSON.stringify(sent[0].messages),/课堂完整原文/);assert.match(JSON.stringify(sent[1].messages),/课堂完整原文/);
+});
+
+test('Harmony knowledge background work runs serially and cancellation prevents subsequent jobs',async()=>{
+ const filename=path.join(root,'services/KnowledgeJobs.ets'),source=fs.readFileSync(filename,'utf8'),output=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText,exports={};let running=0,maxRunning=0,started=0,release;
+ class FakeAi {async cachedKnowledge(){return undefined}async buildKnowledge(_store,_lesson,_model,valid){started++;running++;maxRunning=Math.max(maxRunning,running);await new Promise(resolve=>{release=resolve});running--;return valid()}cancel(){release?.()}}
+ vm.runInNewContext(output,{exports,require:name=>name==='./AiClient'?{AiClient:FakeAi}:name==='./LocalStore'?{key:x=>x}:{},Promise,Map,Set});const jobs=exports.KnowledgeJobs,store={dataFolder:'fake',cache:{enabled:()=>true}},item=id=>({course:{subId:id},lines:[{text:'测试'}],gaps:[]});
+ jobs.schedule(store,[item('one'),item('two')],'model',()=>true,()=>{});jobs.schedule(store,[item('three')],'model',()=>true,()=>{});while(!release)await new Promise(resolve=>setTimeout(resolve,0));assert.equal(started,1);jobs.cancel();await new Promise(resolve=>setTimeout(resolve,10));assert.equal(started,1);assert.equal(maxRunning,1);
+});

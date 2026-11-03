@@ -1,3 +1,4 @@
+import { KnowledgeJobs } from '../services/KnowledgeJobs';
 import { ReturnAction } from './ReturnAction';
 import { SummaryCache } from '../services/SummaryCache';
 import { answerParts } from '../model/AiStream';
@@ -165,6 +166,10 @@ export struct PageSummary {
       const answer = await this.ai.ask(store, contextSlides, contextLines, '帮助学生用最短时间理解当前页。概括这一页的关键知识、老师在此页讲了什么；没有转写时只依据课件，不虚构老师讲解。能从所给上下文看出时，自然说明它与前文的联系及在本课中的作用。不要描述页面左侧右侧、排版或机械列出新增点。用自然简洁的中文，约100—180字，有必要才列要点；引用讲解时间用[mm:ss]。' + (this.scope === 'page' ? '当前只给出这一页的证据，不推测其他页。' : this.scope === 'courseAll' ? '结合这门课已提供的所有课次，包括本节之前和之后的内容，简要说明当前页在整门课中的作用。区分提问时点已经讲过的知识和之后才讲的知识；跨课引用必须带日期、开课时间及课内时间。' : this.scope === 'course' ? '把同一门课所有前序课次与本节课截至本页的内容作为背景，解释本页与已讲知识的联系；不使用本节课后面的内容，也不重述整门课。历史课次引用使用日期和课内时间，不能混成本节课的时间链接。' : this.scope === 'before' ? '以本页之前的内容为背景，不重述全部前文。' : '联系整课脉络；直播未结束时只依据现有内容。'), at, (this.scope === 'whole' || this.scope === 'courseAll'), store.readJson('ai-model.txt') || 'deepseek-flash', [], (status: string) => { if (gen === this.epoch) this.status = status; }, 'always', slide.id, (answer: string) => { if (gen === this.epoch) this.streaming = answer; }, [], this.crossScope() ? this.prior : undefined);
       if (gen !== this.epoch) return;
       const results: Record<string, PageSummaryRecord> = {}; Object.keys(this.results).forEach((id: string) => results[id] = this.results[id]); const record: PageSummaryRecord = { answer, signature, savedAt: Date.now(), completed, contextAt: this.crossScope() ? at : undefined, priorKey: this.crossScope() ? priorKey : undefined, references: this.crossScope() ? this.prior?.lessons.map((lesson) => lesson.course) : undefined }; results[slide.id] = summaryCache ? summaryCache.save(scope, slide.id, record, this.results, cacheRevision) : record; this.results = results; this.syncReading();
+      const materials: PriorLesson[] = this.crossScope() && this.prior ? this.prior.lessons.slice() : [];
+      const ownerCourse = store.activeCourse, incomplete = contextLines.some((line: Transcript): boolean => line.timing === 'source' || line.timing === 'received') && !contextLines.some((line: Transcript): boolean => line.timing === 'history');
+      if ((scope === 'whole' || scope === 'courseAll') && ownerCourse && !this.live && ownerCourse.end > 0 && ownerCourse.end <= Date.now() / 1000 && contextSlides.length && contextLines.length && !incomplete) materials.push({ course: ownerCourse, slides: contextSlides.slice(), lines: contextLines.slice(), gaps: [] });
+      KnowledgeJobs.schedule(store, materials, store.readJson('ai-model.txt') || 'deepseek-flash', (): boolean => this.store === store, (): void => { this.getUIContext().getPromptAction().showToast({ message: '正在后台建立课程知识索引，将使用个人 AI 额度', duration: 2500 }); }, true);
       if (this.requestedId === slide.id) this.requestedId = '';
       if (!summaryCache) store.saveFeature('summary', 'summary-' + scope + '.json', JSON.stringify(results), cacheRevision); this.status = '';
     } catch (err) { if (gen === this.epoch) { this.status = (err as Error).message; this.failures.set(slide.id, completed); } }
