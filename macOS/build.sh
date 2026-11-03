@@ -55,6 +55,8 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict></plist>
 PLIST
 cp scripts/zhiyun_mcp.py "$app/Contents/Resources/zhiyun_mcp.py"
+cp LICENSE "$app/Contents/Resources/LICENSE-GPL-3.0.txt"
+cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/THIRD_PARTY_NOTICES.md"
 # Ad-hoc signing is for local builds. Developer ID signing/notarization remains a
 # separate release step and never requires embedding certificates or secrets.
 codesign --force --deep --sign - --identifier cn.suike.slides.mac.showcase "$app"
