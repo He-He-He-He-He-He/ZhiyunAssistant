@@ -132,9 +132,9 @@ export class AiClient {
     const apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 DeepSeek API 密钥');
     if (!model || model.length > 100 || messages.length > 200 || JSON.stringify(messages).length > 1024 * 1024 || tools.length > 16) throw new Error('助手请求超出限制');
     this.usageStore = store;
-    const request = { model, messages, max_tokens: 4000, stream: true, thinking: { type: 'disabled' }, tools } as unknown as StreamRequest;
+    const request = { model, messages, max_tokens: 16384, stream: true, thinking: { type: 'enabled' }, tools } as unknown as StreamRequest;
     const answer = await this.stream(apiKey, request, changed);
-    return { answer: answer.answer, calls: answer.calls, truncated: answer.finishReason === 'length' };
+    return { answer: answer.answer, calls: answer.calls, reasoning_content: answer.reasoning, truncated: answer.finishReason === 'length' };
   }
   async ask(store: LocalStore, slides: Slide[], lines: Transcript[], question: string, at: number, whole: boolean, model: string, history: ChatTurn[], progress: (value: string) => void, mode: string = 'auto', currentId: string = '', changed: (answer: string) => void = () => {}, selectedIds: string[] = [], prior: PriorCourseContext | undefined = undefined, loadContext: (() => Promise<CourseMaterials>) | undefined = undefined, onScope: (whole: boolean, expanded: boolean) => void = () => {}, viewingMode: QuestionViewingMode | undefined = undefined): Promise<string> {
     this.usageStore = store;

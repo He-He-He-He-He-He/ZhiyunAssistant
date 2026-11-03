@@ -2,7 +2,7 @@ import { AiUsage } from './AiUsage';
 export interface ToolFunction { name: string; arguments: string }
 export interface ToolCall { id: string; type: string; function: ToolFunction }
 interface ToolDelta { index: number; id?: string; type?: string; function?: ToolFunction }
-interface StreamDelta { content?: string; tool_calls?: ToolDelta[] }
+interface StreamDelta { content?: string; reasoning_content?: string; tool_calls?: ToolDelta[] }
 interface StreamChoice { delta?: StreamDelta; finish_reason?: string }
 interface StreamError { message?: string }
 interface StreamEvent { usage?: AiUsage; choices?: StreamChoice[]; error?: StreamError }
@@ -10,6 +10,7 @@ export class AiStream {
   private buffer: string = '';
   usage: AiUsage | undefined = undefined;
   answer: string = '';
+  reasoning: string = '';
   calls: ToolCall[] = [];
   done: boolean = false;
   finishReason: string = '';
@@ -27,6 +28,7 @@ export class AiStream {
           if (event.error) throw new Error('AI 服务返回错误，请重试');
           const choice = event.choices?.[0]; if (choice?.finish_reason) this.finishReason = choice.finish_reason;
           const delta = choice?.delta;
+          if (delta?.reasoning_content) this.reasoning += delta.reasoning_content;
           if (delta?.content) { this.answer += delta.content; changed(this.answer); }
           delta?.tool_calls?.forEach((part: ToolDelta) => {
             if (!this.calls[part.index]) this.calls[part.index] = { id: '', type: 'function', function: { name: '', arguments: '' } };

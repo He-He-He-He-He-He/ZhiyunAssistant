@@ -1,7 +1,7 @@
 import { AppActions } from './AppActions';
 export interface AssistantToolCall { id: string; function: { name: string; arguments: string } }
-export interface AssistantMessage { role: 'system' | 'user' | 'assistant' | 'tool'; content: string | null; tool_calls?: AssistantToolCall[]; tool_call_id?: string }
-export interface AssistantReply { answer: string; calls: AssistantToolCall[]; truncated?: boolean }
+export interface AssistantMessage { role: 'system' | 'user' | 'assistant' | 'tool'; content: string | null; tool_calls?: AssistantToolCall[]; tool_call_id?: string; reasoning_content?: string }
+export interface AssistantReply { answer: string; calls: AssistantToolCall[]; reasoning_content?: string; truncated?: boolean }
 export interface AssistantTransport { turn(messages: AssistantMessage[], tools: unknown[], signal: AbortSignal, onText: (text: string) => void): Promise<AssistantReply> }
 export type AssistantEvent = { type: 'text' | 'action' | 'result' | 'done'; text: string };
 /** In-app only. Tools are registered explicitly and validated; models cannot execute code. */
@@ -23,7 +23,7 @@ export class AppAssistantRunner {
         if (reply.truncated) throw new Error('模型输出未完整，操作未执行');
         if (!reply.calls.length) { if (!reply.answer.trim()) throw new Error('AI 未返回有效结果'); this.emit({ type: 'done', text: reply.answer }); return reply.answer; }
         if (reply.calls.length > 16) throw new Error('操作过多，请缩小任务范围');
-        messages.push({ role: 'assistant', content: reply.answer || null, tool_calls: reply.calls });
+        messages.push({ role: 'assistant', content: reply.answer || '', reasoning_content: reply.reasoning_content || '', tool_calls: reply.calls });
         for (const call of reply.calls) {
           guard(); let result: unknown;
           try {
