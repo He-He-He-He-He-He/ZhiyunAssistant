@@ -1128,7 +1128,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         }
     }
     func requiresSessionRecovery(_ done:@escaping(Bool)->Void){
-        storageQueue.async{let protected=self.sessionVault.read()==nil && self.credentialCache.requiresAuthorization([persistedSessionCredential,"cookies"])
+        storageQueue.async{let sealed=self.root.appendingPathComponent("Session/session.sealed");let protected=self.sessionVault.read()==nil && (self.fm.fileExists(atPath:sealed.path) || self.credentialCache.requiresAuthorization([persistedSessionCredential,"cookies",officialLoginCredential]))
             DispatchQueue.main.async{
                 guard protected else{done(false);return}
                 // Persistent storage permission is not online course permission. A
