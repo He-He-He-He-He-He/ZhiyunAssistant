@@ -15,7 +15,7 @@ AI 功能需要用户自行配置个人 DeepSeek API。
 
 ## 下载与安装
 
-前往[跨平台预览版发布页](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.9-preview)。
+前往[跨平台预览版发布页](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/updates-2026.11-preview)。
 
 - [仓库源码](../)：完整、无私人签名材料的工程，推荐通过 DevEco Studio 打开其中的 `harmonyOS` 目录，配置自己的自动签名并运行。
 - `ZhiyunAssistant-HarmonyOS-0.7.9-unsigned.hap`：已编译的未签名 HAP，供已有合法签名材料的开发者自行签名；不能直接安装。
