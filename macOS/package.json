@@ -2,6 +2,7 @@
   "name": "zhiyun-assistant-mac",
   "version": "1.8.7",
   "private": true,
+  "license": "GPL-3.0-only",
   "description": "Native macOS shell with shared HarmonyOS classroom models",
   "engines": {
     "node": ">=20"

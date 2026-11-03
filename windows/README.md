@@ -90,4 +90,4 @@ node scripts/package-audit.cjs --dir release/win-arm64-unpacked --arch arm64 --r
 
 Windows 用户机器的真实校园登录、全部教室直播、付费 DeepSeek 请求、显卡硬件解码、休眠/弱网、DPI、多屏及长时间高负载还需要进一步验证。合成课堂和自生成 MP4/HLS 的自动检查可定位程序行为，但不代替这些现场路径。发现问题时请记录版本、系统与架构、具体操作和错误提示，并对截图与日志中的个人及课程信息做模糊处理。
 
-项目元数据采用 UNLICENSED，当前没有新增本项目 MIT 许可证。第三方信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+项目自行编写的代码采用 [GPL-3.0-only](../LICENSE)；第三方组件遵循其各自许可，信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

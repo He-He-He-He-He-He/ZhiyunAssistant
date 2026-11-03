@@ -57,4 +57,4 @@ npm run build:web
 
 界面测试：`npx playwright install chromium` 后运行 `npm run test:ui`。这些测试使用明确的合成资料，不获取用户课程和付费 AI。Android 原生仪器测试使用应用独立测试目录，不删除用户笔记、缓存或会话。
 
-本机资料、离线资源和账号不随 APK 或源码发布。更多第三方信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。项目未新增 MIT 等原作授权。
+本机资料、离线资源和账号不随 APK 或源码发布。更多第三方信息见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。项目自行编写的代码采用 [GPL-3.0-only](../LICENSE)，第三方组件遵循其各自许可。

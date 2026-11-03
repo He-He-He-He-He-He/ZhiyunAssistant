@@ -45,4 +45,4 @@ npm test
 
 测试用例使用合成资料；374 项回归不等于全部触控、键鼠、教室媒体和设备型号已验收。SDK 编译与真机检查仍需 DevEco Studio 和相应设备。测试依赖单独锁定，不成为鸿蒙应用的运行依赖。
 
-公开源码不含私人账号、密钥、会话、笔记或真实课程原文。构建输出、签名配置和本机 SDK 路径已忽略。源码沿用仓库现有授权状态，未另行添加 MIT 等本项目许可证；第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+公开源码不含私人账号、密钥、会话、笔记或真实课程原文。构建输出、签名配置和本机 SDK 路径已忽略。项目自行编写的代码采用 [GPL-3.0-only](../LICENSE)；第三方组件遵循其各自许可，声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
