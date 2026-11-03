@@ -219,13 +219,18 @@ func authenticationExpired(_ response:HTTPURLResponse,_ data:Data)->Bool {
     if response.statusCode==401{return true}
     guard (200..<400).contains(response.statusCode) else{return false}
     if let row=try? JSONSerialization.jsonObject(with:data) as? [String:Any]{
-        var pending=[row],codes=[Int](),depth=0
+        var pending=[row],codes=[Int](),depth=0,authenticationHint=false
         while !pending.isEmpty && depth<3{
             var next=[[String:Any]]()
-            for item in pending{if let code=item["code"] as? Int ?? Int(item["code"] as? String ?? ""){codes.append(code)};for key in ["result","data"]{if let nested=item[key] as? [String:Any]{next.append(nested)}}}
+            for item in pending{
+                if let code=item["code"] as? Int ?? Int(item["code"] as? String ?? ""){codes.append(code)}
+                if let raw=item["err"]{let value=String(describing:raw).lowercased();let failed = !["0","false","", "<null>"].contains(value);let message=(item["errMsg"] as? String ?? "").lowercased();if failed && ["请先登录","未登录","登录已过期","登录失效","会话已过期","token expired","authentication required"].contains(where:{message.contains($0)}){authenticationHint=true}}
+                for key in ["result","data"]{if let nested=item[key] as? [String:Any]{next.append(nested)}}
+            }
             pending=next;depth+=1
         }
         if codes.contains(403){return false};if codes.contains(401){return true}
+        if authenticationHint && response.url?.host?.lowercased()=="classroom.zju.edu.cn" {return true}
     }
     let type=response.mimeType?.lowercased() ?? "",host=response.url?.host?.lowercased() ?? "",path=response.url?.path.lowercased() ?? ""
     return type.contains("text/html") && (host != "classroom.zju.edu.cn" || path.contains("login") || data.starts(with:Array("<!DOCTYPE".utf8)) || data.starts(with:Array("<!doctype".utf8)))
@@ -1163,7 +1168,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                             else{self.resumeOfficialSession(force:true,done:retry)}
                         };return
                     }
-                    if url.path.contains("get-week-schedules"),let envelope=try? JSONSerialization.jsonObject(with:data) as? [String:Any]{let result=envelope["result"];let kind=result is [Any] ? "array":result is [String:Any] ? "object":"empty";let keys=(result as? [String:Any])?.keys.sorted().joined(separator:",") ?? "";self.diagnostic("Schedule schema code " + String(describing:envelope["code"] ?? "none") + " result " + kind + " keys " + keys)}
+                    if url.path.contains("get-week-schedules"),let envelope=try? JSONSerialization.jsonObject(with:data) as? [String:Any]{let result=envelope["result"];let kind=result is [Any] ? "array":result is [String:Any] ? "object":"empty";let nested=result as? [String:Any];let keys=nested?.keys.sorted().joined(separator:",") ?? "";let inner=nested?["data"];let innerKind=inner is [Any] ? "array":inner is [String:Any] ? "object":inner is NSNull ? "null":inner is String ? "string":inner is NSNumber ? "number":"other";let innerKeys=(inner as? [String:Any])?.keys.sorted().joined(separator:",") ?? "";let rawErr=nested?["err"];let err=rawErr is Bool ? String(describing:rawErr!) : rawErr is Int ? String(describing:rawErr!) : "other";let message=(nested?["errMsg"] as? String ?? "").lowercased();let category=message.contains("登录") || message.contains("login") || message.contains("auth") || message.contains("token") ? "auth":message.contains("权限") || message.contains("permission") ? "permission":message.isEmpty ? "empty":"other";self.diagnostic("Schedule schema code " + String(describing:envelope["code"] ?? "none") + " result " + kind + " keys " + keys + " inner " + innerKind + " innerKeys " + innerKeys + " err " + err + " message " + category)}
                     self.diagnostic("API "+url.path+" status "+String(response.statusCode));self.reply(id,["status":expired ? 401:response.statusCode,"text":String(data:data,encoding:.utf8) ?? ""])
                 }
             }};self.requests[id]=task;task.resume()

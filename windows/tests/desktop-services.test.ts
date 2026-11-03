@@ -12,6 +12,8 @@ import { Course, groupPages } from '../src/shared/model/Timeline';
 import { CourseCollections } from '../src/shared/model/CourseCollections';
 import { SummaryCache } from '../src/shared/services/SummaryCache';
 import { createServices } from '../src/desktop/services';
+import { AiClient } from '../src/shared/services/AiClient';
+import { Zhiyun } from '../src/shared/services/Zhiyun';
 import JSZip from 'jszip';
 import { blackBorderRegionAsync, compareScreenshotsAsync, disposeImageJobs } from '../src/desktop/image-jobs';
 import { safeFilename } from '../src/shared/model/StudyFolders';
@@ -235,4 +237,44 @@ test('clearing course cache cancels an in-flight history writer instead of recre
 test('detailed runtime cleanup deletes only selected cache category rather than every browser cache', async () => {
  const { root, cleanup } = fixture(); for (const name of ['Code Cache', 'GPUCache']) { fs.mkdirSync(path.join(root, name)); fs.writeFileSync(path.join(root, name, 'data'), 'cached'); } const backend = createServices(sessionFixture(root, async url => apiFixture(url)), root, () => {}, securityAdapters);
  try { await backend.handle('session.restore'); const detail = await backend.handle('cache.detail', { kind: 'runtime' }); const code = detail.find((entry: any) => entry.label.includes('网页脚本缓存')); assert.ok(code); await backend.handle('cache.clear', { kind: 'runtime', ids: [code.id] }); assert.equal(fs.existsSync(path.join(root, 'Code Cache')), false); assert.equal(fs.existsSync(path.join(root, 'GPUCache', 'data')), true); } finally { await backend.dispose(); cleanup(); }
+});
+test('assistant history is listed, controllable and removed with all caches', async () => {
+ const {root,cleanup}=fixture(), events:string[]=[]; const backend=createServices(sessionFixture(root,async url=>apiFixture(url)),root,(name)=>events.push(name),securityAdapters);
+ try { await backend.handle('session.restore'); const value=[{id:'synthetic',turns:[]}]; await backend.handle('storage.set',{key:'app-assistant-history-v1',value});
+  assert.deepEqual(await backend.handle('storage.get',{key:'app-assistant-history-v1'}),value);
+  assert.equal((await backend.handle('cache.list')).find((row:any)=>row.kind==='assistant')?.count,1);
+  await backend.handle('cache.clear',{kind:'assistant'}); assert.equal(await backend.handle('storage.get',{key:'app-assistant-history-v1'}),null); assert.ok(events.includes('assistant.historyCleared'));
+  await backend.handle('cache.toggle',{kind:'assistant',enabled:false}); await backend.handle('storage.set',{key:'app-assistant-history-v1',value}); assert.equal(await backend.handle('storage.get',{key:'app-assistant-history-v1'}),null);
+  await backend.handle('cache.toggle',{kind:'assistant',enabled:true}); await backend.handle('storage.set',{key:'app-assistant-history-v1',value}); await backend.handle('cache.clearAll'); assert.equal(await backend.handle('storage.get',{key:'app-assistant-history-v1'}),null);
+ } finally { await backend.dispose(); cleanup(); }
+});
+test('assistant requests cancelled before dispatch never start model or history work', async () => {
+ const {root,cleanup}=fixture(), backend=createServices(sessionFixture(root,async url=>apiFixture(url)),root,()=>{},securityAdapters);
+ try { await backend.handle('session.restore'); await backend.handle('ai.cancel',{requestId:'assistant-before'}); await assert.rejects(backend.handle('assistant.turn',{requestId:'assistant-before',messages:[],tools:[]}),/任务已停止/);
+  await backend.handle('ai.cancel',{requestId:'history-before'}); await assert.rejects(backend.handle('assistant.history',{requestId:'history-before'}),/任务已停止/);
+ } finally { await backend.dispose(); cleanup(); }
+});
+
+test('assistant slide recognition respects a newly revoked course permission', async () => {
+ const {root,cleanup}=fixture(); let allowed=true, reads=0; const original=AiClient.prototype.assistantReadSlide;
+ AiClient.prototype.assistantReadSlide=async()=>{ reads++; return 'synthetic'; };
+ const backend=createServices(sessionFixture(root,async url=>apiFixture(url,allowed)),root,()=>{},securityAdapters);
+ try { await backend.handle('session.restore'); const lesson=await backend.handle('lesson.open',{course}); allowed=false;
+  await assert.rejects(backend.handle('assistant.readSlide',{requestId:'assistant-slide-test',slideId:lesson.slides[0].id}),/访问权限/); assert.equal(reads,0); await assert.rejects(backend.handle('assistant.readTranscript',{requestId:'assistant-transcript-test',offset:0}),/访问权限/);
+ } finally { AiClient.prototype.assistantReadSlide=original; await backend.dispose(); cleanup(); }
+});
+
+test('stopping assistant history scanning prevents late cache writes', async () => {
+ const {root,cleanup}=fixture(), backend=createServices(sessionFixture(root,async url=>apiFixture(url)),root,()=>{},securityAdapters);const original=Zhiyun.prototype.attendanceHistory;let release!:()=>void,started!:()=>void;
+ const gate=new Promise<void>(resolve=>release=resolve), entered=new Promise<void>(resolve=>started=resolve);
+ Zhiyun.prototype.attendanceHistory=async()=>{started();await gate;return {courses:[],cursor:'',emptyWindows:0,complete:true,windowsDone:1,failed:false};};
+ try {await backend.handle('session.restore');const pending=backend.handle('assistant.history',{requestId:'history-running'});await entered;await backend.handle('ai.cancel',{requestId:'history-running'});release();await assert.rejects(pending,/任务已停止/);const cached=await backend.handle('assistant.cachedHistory');assert.equal(cached.complete,false);}
+ finally {Zhiyun.prototype.attendanceHistory=original;await backend.dispose();cleanup();}
+});
+test('assistant uses the real streaming transport for thinking and tool calls', async () => {
+ const {root,cleanup}=fixture(), saved=AiClient.savedKey;AiClient.savedKey=async()=> 'synthetic-only';let url='';
+ const content=['data: {"choices":[{"delta":{"reasoning_content":"reason"}}]}\n\n','data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"app_do","arguments":"{\\"action\\":\\"back\\",\\"args\\":{}}"}}]}}]}\n\n','data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n'].join('');
+ configureCompat({fetch:async(address:string)=>{url=address;return new Response(content,{status:200,headers:{'content-type':'text/event-stream'}})}} as any,root,securityAdapters);const client=new AiClient();
+ try {const result=await client.assistantTurn({} as any,'deepseek-flash',[{role:'user',content:'返回'}],[],()=>{});assert.equal(result.reasoning_content,'reason');assert.equal(result.calls[0].function.name,'app_do');assert.equal(JSON.parse(result.calls[0].function.arguments).action,'back');assert.equal(url,'https://api.deepseek.com/chat/completions');}
+ finally {client.cancel();AiClient.savedKey=saved;cleanup();}
 });

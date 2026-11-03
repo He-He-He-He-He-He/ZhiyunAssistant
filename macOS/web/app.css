@@ -679,3 +679,7 @@ html[data-theme=playful] .playful-copy { display: block !important; }
 }
 
 /* First-use school-service notice, independent of course modal/layout state. */
+
+/* Visible outside the native toolbar, including after the current page changes. */
+.session-recovery-notice { position: fixed; z-index: 1200; right: 24px; bottom: 24px; display: flex; align-items: center; gap: 12px; max-width: min(460px, calc(100vw - 48px)); padding: 14px 16px; border: 1px solid var(--line, #d8e4f1); border-radius: 14px; background: var(--card, #fff); color: var(--text, #172b4d); box-shadow: 0 8px 28px #102e5026; font-size: 13px; }
+.session-recovery-notice button { flex: none; }

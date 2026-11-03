@@ -23,7 +23,7 @@ export struct ApiKeySetup {
     Scroll() {
       Column({ space: 14 }) {
         Text('使用 DeepSeek API').fontSize(20).fontWeight(FontWeight.Medium).fontColor('#20344D').width('100%')
-        Text('在 DeepSeek 开放平台创建 API 密钥。启用问答或速览后，相关课件和转写会发送给 DeepSeek；请求费用由你的 API 账户承担。密钥加密保存在本机。').fontSize(13).fontColor('#71839A').lineHeight(22).width('100%')
+        Text('在 DeepSeek 开放平台创建 API 密钥。启用课程问答、速览或应用助手后，相关内容与操作结果会发送给 DeepSeek；请求费用由你的 API 账户承担。密钥加密保存在本机。').fontSize(13).fontColor('#71839A').lineHeight(22).width('100%')
         TextInput({ controller: this.apiInput.controller, text: this.keyInput, placeholder: '输入 API 密钥' }).onKeyPreIme((event: KeyEvent): boolean => this.apiInput.digit(event, this.keyInput, (value: string) => this.keyInput = value)).type(InputType.Password).onTouch((event: TouchEvent) => event.stopPropagation()).onMouse((event: MouseEvent) => event.stopPropagation()).height(44).onFocus(() => this.onEditingFocus(true)).onBlur(() => { this.apiInput.reset(); this.onEditingFocus(false); }).onChange((value: string) => this.keyInput = value)
         Button(this.busy ? '正在连接' : '保存并启用').width('100%').height(40).backgroundColor('#168BEE').fontColor('#FFFFFF').enabled(!this.busy && !!this.keyInput.trim()).onClick(() => this.save())
         Button('前往 DeepSeek 开放平台').height(30).fontSize(12).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => { const context = this.getUIContext().getHostContext() as common.UIAbilityContext; context.startAbility({ action: 'ohos.want.action.viewData', uri: 'https://platform.deepseek.com/api_keys', entities: ['entity.system.browsable'] }).catch(() => this.error = '请在浏览器打开 platform.deepseek.com'); })

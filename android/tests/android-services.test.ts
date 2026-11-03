@@ -11,6 +11,7 @@ import { createServices } from '../src/desktop/services';
 import { installAndroidServices } from '../src/desktop/android-bootstrap';
 import { LocalStore, key } from '../src/shared/services/LocalStore';
 import { Zhiyun } from '../src/shared/services/Zhiyun';
+import { AiClient } from '../src/shared/services/AiClient';
 import { SessionStore } from '../src/shared/services/SessionStore';
 import { blackBorderRegion } from '../src/shared/model/BlackBorders';
 import { disposeImageJobs } from '../src/desktop/image-jobs';
@@ -153,3 +154,46 @@ test('a late camera request for a previous lesson cannot populate the new lesson
 });
 
 test('runtime cache policy reaches WebView and video buffer has no misleading persistence switch', async () => { const h=harness(), services=createServices(createAndroidSession(h.cache),h.root,()=>{}); try { await services.handle('session.account'); await services.handle('cache.toggle',{kind:'runtime',enabled:false}); assert.ok(h.calls.some(c=>c.method==='app.cachePolicy' && c.payload.enabled===false)); const rows=await services.handle('cache.list'); assert.equal(rows.find((r:any)=>r.kind==='runtime').enabled,false); assert.equal(rows.find((r:any)=>r.kind==='video').controllable,false); } finally { await services.dispose();h.dispose(); } });
+test('assistant history is listed, controllable and removed with all caches', async () => {
+ const h=harness(), events:string[]=[]; const services=createServices(createAndroidSession(h.cache),h.root,(name)=>events.push(name));
+ try { await services.handle('session.account'); const value=[{id:'synthetic',turns:[]}]; await services.handle('storage.set',{key:'app-assistant-history-v1',value});
+  assert.deepEqual(await services.handle('storage.get',{key:'app-assistant-history-v1'}),value);
+  assert.equal((await services.handle('cache.list')).find((row:any)=>row.kind==='assistant')?.count,1);
+  await services.handle('cache.clear',{kind:'assistant'}); assert.equal(await services.handle('storage.get',{key:'app-assistant-history-v1'}),null); assert.ok(events.includes('assistant.historyCleared'));
+  await services.handle('cache.toggle',{kind:'assistant',enabled:false}); await services.handle('storage.set',{key:'app-assistant-history-v1',value}); assert.equal(await services.handle('storage.get',{key:'app-assistant-history-v1'}),null);
+  await services.handle('cache.toggle',{kind:'assistant',enabled:true}); await services.handle('storage.set',{key:'app-assistant-history-v1',value}); await services.handle('cache.clearAll'); assert.equal(await services.handle('storage.get',{key:'app-assistant-history-v1'}),null);
+ } finally { await services.dispose(); h.dispose(); }
+});
+test('assistant requests cancelled before dispatch never start model or history work', async () => {
+ const h=harness(), services=createServices(createAndroidSession(h.cache),h.root,()=>{});
+ try { await services.handle('session.account'); await services.handle('ai.cancel',{requestId:'assistant-before'}); await assert.rejects(services.handle('assistant.turn',{requestId:'assistant-before',messages:[],tools:[]}),/任务已停止/);
+  await services.handle('ai.cancel',{requestId:'history-before'}); await assert.rejects(services.handle('assistant.history',{requestId:'history-before'}),/任务已停止/);
+ } finally { await services.dispose(); h.dispose(); }
+});
+
+test('assistant slide recognition respects a newly revoked course permission', async () => {
+ const h=harness(), services=createServices(createAndroidSession(h.cache),h.root,()=>{}), prototype=Zhiyun.prototype; let allowed=true, reads=0;
+ const original={permission:prototype.checkCurrentPermission,slides:prototype.slides,transcripts:prototype.transcripts,read:AiClient.prototype.assistantReadSlide};
+ prototype.checkCurrentPermission=async()=>{if(!allowed)throw new Error('没有访问权限');}; prototype.slides=async()=>[{id:'fixture-slide',t:0,url:'https://classroom.zju.edu.cn/fixture.png',thumb:'',note:''}]; prototype.transcripts=async()=>[]; AiClient.prototype.assistantReadSlide=async()=>{reads++;return 'synthetic';};
+ try { await services.handle('session.account'); await services.handle('lesson.open',{course}); allowed=false;
+  await assert.rejects(services.handle('assistant.readSlide',{requestId:'assistant-slide-test',slideId:'fixture-slide'}),/访问权限/); assert.equal(reads,0); await assert.rejects(services.handle('assistant.readTranscript',{requestId:'assistant-transcript-test',offset:0}),/访问权限/);
+ } finally { prototype.checkCurrentPermission=original.permission; prototype.slides=original.slides; prototype.transcripts=original.transcripts; AiClient.prototype.assistantReadSlide=original.read; await services.dispose(); h.dispose(); }
+});
+
+test('stopping assistant history scanning prevents late cache writes', async () => {
+ const h=harness(), services=createServices(createAndroidSession(h.cache),h.root,()=>{}); const original=Zhiyun.prototype.attendanceHistory; let release!:()=>void, started!:()=>void;
+ const gate=new Promise<void>(resolve=>release=resolve), entered=new Promise<void>(resolve=>started=resolve);
+ Zhiyun.prototype.attendanceHistory=async()=>{started();await gate;return {courses:[],cursor:'',emptyWindows:0,complete:true,windowsDone:1,failed:false};};
+ try {await services.handle('session.account');const pending=services.handle('assistant.history',{requestId:'history-running'});await entered;await services.handle('ai.cancel',{requestId:'history-running'});release();await assert.rejects(pending,/任务已停止/);const cached=await services.handle('assistant.cachedHistory');assert.equal(cached.complete,false);}
+ finally {Zhiyun.prototype.attendanceHistory=original;await services.dispose();h.dispose();}
+});
+test('assistant uses the real streaming transport for thinking and tool calls', async () => {
+ const h=harness(), saved=AiClient.savedKey;AiClient.savedKey=async()=> 'synthetic-only'; const client=new AiClient();let request:any;
+ try {h.setStream(async p=>{request=p;const content=[
+  'data: {"choices":[{"delta":{"reasoning_content":"reason"}}]}\n\n',
+  'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"app_do","arguments":"{\\"action\\":\\"back\\",\\"args\\":{}}"}}]}}]}\n\n',
+  'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n'
+ ].join('');h.event('http.data',{requestId:p.requestId,sequence:0,base64:Buffer.from(content).toString('base64')});h.event('http.end',{requestId:p.requestId});return {status:200};});
+ const result=await client.assistantTurn({} as any,'deepseek-flash',[{role:'user',content:'返回'}],[],()=>{});assert.equal(result.reasoning_content,'reason');assert.equal(result.calls[0].function.name,'app_do');assert.equal(JSON.parse(result.calls[0].function.arguments).action,'back');assert.equal(request.url,'https://api.deepseek.com/chat/completions');
+ } finally {client.cancel();AiClient.savedKey=saved;h.dispose();}
+});

@@ -341,11 +341,15 @@ function renderSessionRecovery() {
   const actions = $("#topActions");
   if (!actions) return;
   actions.querySelectorAll("[data-session-recovery]").forEach((node) => node.remove());
+  document.querySelector("#sessionRecoveryNotice")?.remove();
   if (!account || (!sessionRecoveryRequired && !sessionRecoveryBusy)) return;
+  const notice = el("aside", { id: "sessionRecoveryNotice", role: "status", class: "session-recovery-notice" });
+  notice.append(el("span", { text: "需要恢复登录才能同步在线课程，本机资料仍可查看。" }));
   const restore = button(sessionRecoveryBusy ? "恢复中…" : "恢复登录", restoreSignedInSession);
   restore.dataset.sessionRecovery = "true";
   restore.disabled = sessionRecoveryBusy;
-  actions.append(restore);
+  notice.append(restore);
+  document.body.append(notice);
 }
 async function restoreSignedInSession() {
   if (sessionRecoveryBusy || !account) return;

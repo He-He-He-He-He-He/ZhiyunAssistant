@@ -1,6 +1,6 @@
 /** Validated in-app assistant actions. This module does not expose an external interface. */
 export type ActionSchema = { type: 'string' | 'number' | 'boolean' | 'object' | 'array'; properties?: Record<string, ActionSchema>; required?: string[]; items?: ActionSchema; enum?: unknown[]; minimum?: number; maximum?: number; maxLength?: number; maxItems?: number };
-export type ActionGuard = () => void;
+export type ActionGuard = (() => void) & { signal?: AbortSignal };
 export type ActionDefinition = { name: string; description: string; parameters: ActionSchema; run: (args: Record<string, unknown>, guard: ActionGuard) => Promise<unknown> | unknown };
 export function validateActionValue(value: unknown, schema: ActionSchema, path = '参数'): void {
   if (schema.type === 'object') {

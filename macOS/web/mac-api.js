@@ -89,6 +89,8 @@ export function normalizeScheduleEnvelope(data) {
   // Some official endpoints nest their service status beside the list.
   // Never let an error carrying list:[] authorize deleting cached courses.
   const codes=[data.code,result?.code,result?.data?.code].filter(code=>code!=null).map(Number);
+  const authMessage=[data,result,result?.data].some(row=>row && typeof row==='object' && row.err && /请先登录|未登录|登录已过期|登录失效|会话已过期|token expired|authentication required/i.test(String(row.errMsg || '')));
+  if (!codes.includes(403) && authMessage) throw new Error("课程会话未恢复，请恢复登录后重试");
   if(codes.includes(401))throw new Error("课程会话未恢复，请恢复登录后重试");
   // The live service returns {result:{code:400,msg:"课表为空"}} on
   // ordinary no-class dates. This is not an outage or an auth failure.

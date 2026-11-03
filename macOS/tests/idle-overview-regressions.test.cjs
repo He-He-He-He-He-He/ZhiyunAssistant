@@ -36,3 +36,5 @@ test('video updates do not replace an explicitly chosen page with its same-time 
 test('official no-class schedule envelope is readable without removing cached history',async()=>{
  const r=runtime();try{const {normalizeScheduleEnvelope}=await r.load('mac-api.js');const value=normalizeScheduleEnvelope({result:{code:400,msg:'课表为空'}});assert.equal(value.days.length,0);assert.equal(value.authoritative,false);assert.throws(()=>normalizeScheduleEnvelope({result:{code:400,msg:'服务错误'}}));assert.throws(()=>normalizeScheduleEnvelope({code:401,result:{code:400,msg:'课表为空'}}));}finally{r.win.close();}
 });
+
+test('schedule envelopes distinguish explicit login failures from course permission errors',async()=>{const r=runtime();try{const {normalizeScheduleEnvelope}=await r.load('mac-api.js');assert.throws(()=>normalizeScheduleEnvelope({result:{err:true,errMsg:'请先登录',data:null}}),/恢复登录/);assert.throws(()=>normalizeScheduleEnvelope({result:{err:true,errMsg:'没有课程权限',data:null}}),/数据格式/);}finally{r.win.close();}});

@@ -42,3 +42,29 @@ test('fixture course UI exercises keyboard, pages, notes, overview and return na
  await expect(page.locator('.slide-meta')).toHaveCount(2);
  await page.getByRole('button',{name:'课堂笔记',exact:true}).click();await expect(page.getByRole('heading',{name:'课堂笔记',exact:true})).toBeVisible();const editor=page.locator('[contenteditable="true"]').first();await editor.click();await page.keyboard.type('Windows 123');await expect(editor).toContainText('Windows 123');await page.keyboard.press('ArrowLeft');await page.keyboard.type('4');await expect(editor).toContainText('Windows 1243');await page.getByRole('button',{name:'布局',exact:true}).click();await expect(page.locator('.layout-panel')).toBeVisible();await page.getByRole('button',{name:'概览',exact:true}).click();await expect(page.locator('.layout-panel')).toHaveCount(0);await page.getByRole('button',{name:'完成',exact:true}).click();await page.getByRole('button',{name:'返回',exact:true}).click();await expect(page.getByRole('heading',{name:'我的课堂',exact:true})).toBeVisible();
  });
+test('in-app assistant executes a synthetic model navigation', async () => {
+  await app.evaluate(({ ipcMain }) => {
+    ipcMain.removeHandler('zhiyun:call');
+    ipcMain.handle('zhiyun:call', async (_event, method, payload: any = {}) => {
+      switch (method) {
+        case 'session.restore': return { id: 'fixture', name: '测试用户', tenantId: 112 };
+        case 'storage.get': return payload.key === 'privacy-consent' ? true : null;
+        case 'ai.settings': return { configured: true, model: 'deepseek-flash', models: ['deepseek-flash'] };
+        case 'courses.schedule': return [];
+        case 'courses.history': return { courses: [], complete: true };
+        case 'collection.get': return { favorite: [], later: [] };
+        case 'download.list': return { entries: [], tasks: [], concurrency: 1 };
+        case 'assistant.turn': return payload.messages.some((item: any) => item.role === 'tool')
+          ? { answer: '已打开离线课程', calls: [] }
+          : { answer: '', reasoning_content: '合成测试', calls: [{ id: 'one', function: { name: 'app_do', arguments: JSON.stringify({ action: 'navigate', args: { page: 'offline' } }) } }] };
+        default: return null;
+      }
+    });
+  });
+  await page.reload();
+  await page.getByRole('button', { name: '应用助手', exact: true }).click();
+  await page.getByLabel('给应用助手发消息').fill('打开离线课程');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(page.getByText('已打开离线课程')).toBeVisible();
+  await expect(page.locator('.main-nav button.active')).toHaveText('离线课程');
+});

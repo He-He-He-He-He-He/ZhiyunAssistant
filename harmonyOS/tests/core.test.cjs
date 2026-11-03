@@ -1156,7 +1156,7 @@ test('shared input handles top-row/numpad digits at selection without duplicatin
 });
 function componentFixture(file,external={}){
  let source=fs.readFileSync(path.join(root,'components',file+'.ets'),'utf8');const cut=source.indexOf('  @Builder');source=source.slice(0,cut>=0?cut:source.indexOf('  build() {'))+'\n}';
- source=source.replace(/@(?:Component|Prop|State)\s*/g,'').replace(/@(?:Watch|StorageLink)\([^)]*\)\s*/g,'').replace('export struct','export class');
+ source=source.replace(/@(?:Component|Prop|State|Link)\s*/g,'').replace(/@(?:Watch|StorageLink)\([^)]*\)\s*/g,'').replace('export struct','export class');
  const exports={},output=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText;
  vm.runInNewContext(output,{exports,require:name=>external[name]||(name.startsWith('.')?load(path.join('components',name),{},inputGlobals):(name==='@kit.ArkUI'?{FrameCallback:class {}}:{})),Date,Map,Set,setTimeout,clearTimeout,MenuPolicy:{HIDE:0,SHOW:1},Scroller:class {},TextAreaController:class {},RichEditorController:class {},TextController:class {setTextSelection(){} getLayoutManager(){throw Error("fixture not laid out")}},...inputGlobals});return new exports[file]();
 }
@@ -2176,3 +2176,71 @@ test('zoomed photo pans on both axes, clamps to actual letterboxed image and res
  p.beginPinch(500,400);p.pinch(.1,500,400);assert.equal(p.scale,1);assert.equal(p.x,0);assert.equal(p.y,0);
  p.beginPinch(500,400);p.pinch(99,500,400);assert.equal(p.scale,8);p.resize(800,1000);assert.equal(p.scale,1);
 });
+
+test('assistant streaming retains reasoning and detects truncated model replies', () => {
+ const {AiStream}=load('model/AiStream'), stream=new AiStream();
+ stream.push('data: {"choices":[{"delta":{"reasoning_content":"synthetic reasoning"}}]}\n\ndata: {"choices":[{"finish_reason":"length","delta":{}}]}\n',()=>{});
+ assert.equal(stream.reasoning,'synthetic reasoning'); assert.equal(stream.finishReason,'length');
+});
+test('in-app assistant performs validated model tool rounds and preserves reasoning', async () => {
+ const {AppAssistantRunner}=load('model/AppAssistant');let calls=0,executed=0;
+ const runner=new AppAssistantRunner();
+ const reply=await runner.run('返回','owner',()=> 'owner',async messages=>{calls++;if(calls===1)return {answer:'',reasoning:'synthetic',finishReason:'tool_calls',calls:[{id:'one',type:'function',function:{name:'app_do',arguments:'{"action":"back"}'}}]};assert.equal(messages.find(m=>m.role==='assistant').reasoning_content,'synthetic');return {answer:'已返回',reasoning:'',finishReason:'stop',calls:[]}},async action=>{assert.equal(action,'back');executed++;return '{"ok":true}'},()=>{},()=>{});
+ assert.equal(reply,'已返回');assert.equal(executed,1);
+});
+test('in-app assistant never executes truncated or account-switched operations', async () => {
+ const {AppAssistantRunner}=load('model/AppAssistant');let executed=0,owner='a';const tool={id:'one',type:'function',function:{name:'app_do',arguments:'{"action":"back"}'}};
+ await assert.rejects(new AppAssistantRunner().run('返回','a',()=>owner,async()=>({answer:'',reasoning:'',finishReason:'length',calls:[tool]}),async()=>{executed++;return ''},()=>{},()=>{}),/未完整/);
+ await assert.rejects(new AppAssistantRunner().run('返回','a',()=>owner,async()=>{owner='b';return {answer:'',reasoning:'',finishReason:'tool_calls',calls:[tool]}},async()=>{executed++;return ''},()=>{},()=>{}),/账号已切换/);assert.equal(executed,0);
+});
+test('in-app assistant retains previous conversation without incomplete thinking messages', async () => {
+ const {AppAssistantRunner}=load('model/AppAssistant');let sent=[];
+ const answer=await new AppAssistantRunner().run('继续','a',()=> 'a',async messages=>{sent=messages;return {answer:'完成',reasoning:'',finishReason:'stop',calls:[]}},async()=>'',()=>{},()=>{},[{role:'user',content:'上个问题'},{role:'assistant',content:'上个回答'}]);
+ assert.equal(answer,'完成');assert.equal(sent.filter(row=>row.role==='assistant').length,0);assert.match(sent[1].content,/上个回答/);
+});
+test('application assistant history participates in cache controls and clear all', () => {
+ const directory=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'zhiyun-assistant-cache-'));fs.mkdirSync(directory+'/cache');
+ try { const {LocalStore}=load('services/LocalStore',nativeDisk(directory)),store=new LocalStore({filesDir:directory,cacheDir:directory+'/cache'},'synthetic');
+  store.saveJson('app-assistant-history-v1.json','[{"role":"user","content":"fixture"}]');assert.equal(store.extraCaches('assistant').length,1);
+  store.setAssistantCacheEnabled(false);assert.equal(store.assistantCacheEnabled(),false);store.setAssistantCacheEnabled(true);assert.equal(store.assistantCacheEnabled(),true);
+  store.clearAllCaches();assert.equal(store.extraCaches('assistant').length,0);
+ } finally { fs.rmSync(directory,{recursive:true,force:true}); }
+});
+test('Harmony assistant refuses to recognize a slide after permission is revoked', async () => {
+ let reads=0;class DeniedZhiyun { async checkCurrentPermission(){throw new Error('没有访问权限');} cancel(){} }
+ class FakeAi { async assistantReadSlide(){reads++;return 'synthetic';} cancel(){} }
+ const p=indexLogicFixture(['assistantExecute','assistantCheckPermission'],{Zhiyun:DeniedZhiyun,AiClient:FakeAi});p.account={id:'fixture'};p.privacyAccepted=true;p.store={};p.course={subId:'fixture',title:'课程'};p.slides=[{id:'page',t:0}];p.offlineViewing=false;p.assistantActionEpoch=0;
+ await assert.rejects(p.assistantExecute('read_slide','page'),/访问权限/);await assert.rejects(p.assistantExecute('read_transcript','0'),/访问权限/);assert.equal(reads,0);
+});
+test('Harmony assistant cancellation stops history scanning and prevents late writes', async () => {
+ let release,started,writes=0;const gate=new Promise(resolve=>release=resolve),entered=new Promise(resolve=>started=resolve);
+ class Scanner {async attendanceHistory(_account,progress){started();await gate;progress(1,1,{courses:[],cursor:'',complete:true,emptyWindows:0});return {courses:[],cursor:'',complete:true,emptyWindows:0,failed:false};}cancel(){}}
+ const p=indexLogicFixture(['assistantExecute','assistantCourses','stopAssistantAction'],{Zhiyun:Scanner});p.account={id:'a'};p.privacyAccepted=true;p.courses=[];p.assistantActionEpoch=0;p.store={belongsTo:id=>id==='a',loadMyAttendance:()=>undefined,saveMyAttendance:()=>writes++};
+ const pending=p.assistantExecute('refresh_history','');await entered;p.stopAssistantAction();release();await assert.rejects(pending,/任务已停止/);assert.equal(writes,0);
+});
+
+test('Harmony application assistant supports hardware digits and Shift+Enter',async()=>{
+ const keys={KEYCODE_SHIFT_LEFT:2047,KEYCODE_SHIFT_RIGHT:2048,KEYCODE_CTRL_LEFT:2072,KEYCODE_CTRL_RIGHT:2073,KEYCODE_ENTER:2054,KEYCODE_NUMPAD_ENTER:2115};
+ const p=componentFixture('AppAssistant',{'@kit.InputKit':{KeyCode:keys},'./ApiKeySetup':{ApiKeySetup:class{}},'../services/AiClient':{AiClient:class{cancel(){}}},'../model/AppAssistant':{AppAssistantRunner:class{stop(){}}}});
+ p.question='abCD';p.inputController=new TestInputController();p.inputController.value=p.question;p.inputController.setTextSelection(1,3);let sent=0;p.send=()=>sent++;const event={type:0,keyCode:2054,keyText:'Enter',getModifierKeyState:()=>false};
+ p.questionKey({...event,keyCode:2047,keyText:''});assert.equal(p.questionKey(event),true);assert.equal(p.question,'a\nD');p.questionKey({...event,type:1,keyCode:2047,keyText:''});p.questionKey(event);await new Promise(resolve=>setTimeout(resolve,5));assert.equal(sent,1);
+ p.inputController.setTextSelection(p.question.length,p.question.length);p.questionKey({...event,keyCode:2007,keyText:'7'});assert.equal(p.question,'a\nD7');
+});
+test('Harmony assistant conversations persist per account and clear without restoring them',()=>{
+ const p=componentFixture('AppAssistant',{'@kit.InputKit':{KeyCode:{}},'./ApiKeySetup':{ApiKeySetup:class{}},'../services/AiClient':{AiClient:class{cancel(){}}},'../model/AppAssistant':{AppAssistantRunner:class{stop(){}}}});let disk='';p.accountId='a';p.store={belongsTo:id=>id==='a',assistantCacheEnabled:()=>true,saveJson:(_name,value)=>{disk=value},readJson:()=>disk};
+ p.turns=[{role:'user',content:'第一问'},{role:'assistant',content:'第一答'}];p.saveHistory();assert.equal(JSON.parse(disk)[0].title,'第一问');p.newConversation();assert.equal(p.turns.length,0);p.restoreHistory();assert.equal(p.turns[1].content,'第一答');
+ p.clearRevision=1;p.historyCleared();assert.equal(p.turns.length,0);assert.equal(p.conversations.length,0);
+ const old=disk;p.accountId='b';p.turns=[{role:'user',content:'其他'},{role:'assistant',content:'数据'}];p.saveHistory();assert.equal(disk,old);
+});
+test('Harmony assistant uses real SSE transport with thinking and tool calls', async () => {
+ const callbacks={},request={on:(name,fn)=>callbacks[name]=fn,destroy(){}},wire=[];request.requestInStream=async(url,options)=>{wire.push({url,body:JSON.parse(options.extraData)});const data=Buffer.from('data: {"choices":[{"delta":{"reasoning_content":"reason"}}]}\n\ndata: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call1","type":"function","function":{"name":"app_do","arguments":"{\\"action\\":\\"back\\"}"}}]}}]}\n\ndata: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\ndata: [DONE]\n\n');callbacks.dataReceive(data.buffer.slice(data.byteOffset,data.byteOffset+data.byteLength));callbacks.dataEnd();return 200;};
+ const {AiClient}=load('services/AiClient',{'@kit.NetworkKit':{http:{createHttp:()=>request,RequestMethod:{POST:1}}},'@kit.ArkTS':{util:{TextDecoder:{create:()=>({decodeToString:data=>Buffer.from(data).toString('utf8')})}}}});AiClient.savedKey=async()=> 'synthetic-only';const client=new AiClient(),answer=await client.assistantTurn({},'deepseek-flash',[{role:'user',content:'返回'}],()=>{});assert.equal(answer.reasoning,'reason');assert.equal(answer.calls[0].function.name,'app_do');assert.equal(JSON.parse(answer.calls[0].function.arguments).action,'back');assert.equal(wire[0].body.thinking.type,'enabled');assert.equal(wire[0].url,'https://api.deepseek.com/chat/completions');client.cancel();
+});
+test('Harmony assistant can read every character of a long note in chunks',async()=>{
+ const value='x'.repeat(15001),note={id:'n',title:'fixture',course:{subId:'lesson',title:'course'},atoms:[{kind:'text',at:0,value}],savedAt:1};class FakeNotesStore{list(){return[note]}}
+ const p=indexLogicFixture(['assistantExecute'],{NotesStore:FakeNotesStore});p.account={id:'a'};p.privacyAccepted=true;p.store={};
+ const first=JSON.parse(await p.assistantExecute('read_note','lesson:n|0|0')),second=JSON.parse(await p.assistantExecute('read_note','lesson:n|0|10000'));
+ assert.equal(first.nextOffset,0);assert.equal(first.nextCharOffset,10000);assert.equal(second.nextOffset,-1);assert.equal(first.items[0].text.length+second.items[0].text.length,value.length);
+});
+
+test('Harmony assistant does not report failed operations as successful',async()=>{const {AppAssistantRunner}=load('model/AppAssistant');let round=0;const answer=await new AppAssistantRunner().run('打开','a',()=> 'a',async()=>round++?{answer:'全部完成',reasoning:'',finishReason:'stop',calls:[]}:{answer:'',reasoning:'',finishReason:'tool_calls',calls:[{id:'one',type:'function',function:{name:'app_do',arguments:'{"action":"open"}'}}]},async()=>{throw new Error('没有权限')},()=>{},()=>{});assert.match(answer,/部分操作未完成/);});

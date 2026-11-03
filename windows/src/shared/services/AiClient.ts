@@ -128,6 +128,10 @@ export class AiClient {
       await ended; if (!parser.done) throw new Error('回答连接中断，请重试'); this.recordUsage(parser.usage); return parser;
     } finally { req.destroy(); this.pending.delete(req); this.aborts.delete(abort); }
   }
+  async assistantReadSlide(store: LocalStore, slide: Slide, course: Course): Promise<string> {
+    const apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 DeepSeek API 密钥');
+    const value = await this.readSlide(slide, store, apiKey, course); return value.text;
+  }
   async assistantTurn(store: LocalStore, model: string, messages: AssistantMessage[], tools: unknown[], changed: (text: string) => void): Promise<AssistantReply> {
     const apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 DeepSeek API 密钥');
     if (!model || model.length > 100 || messages.length > 200 || JSON.stringify(messages).length > 1024 * 1024 || tools.length > 16) throw new Error('助手请求超出限制');

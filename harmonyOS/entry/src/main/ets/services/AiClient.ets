@@ -14,7 +14,7 @@ import { Course, Slide, Transcript, stamp } from '../model/Timeline';
 interface AiModel { id: string }
 interface ModelsReply { data?: AiModel[] }
 interface ContextArguments { scope: string; pages?: number[] }
-interface AiMessage { role: string; content: string; tool_call_id?: string; tool_calls?: ToolCall[] }
+export interface AiMessage { role: string; content: string; reasoning_content?: string; tool_call_id?: string; tool_calls?: ToolCall[] }
 interface AiChoice { message?: AiMessage }
 interface AiReply { usage?: AiUsage; choices?: AiChoice[] }
 interface VisionUrl { url: string }
@@ -126,6 +126,18 @@ export class AiClient {
       if (status !== 200) throw new Error(status === 401 ? 'API 密钥无效，请重新设置' : status === 402 ? 'DeepSeek 账户余额不足' : `AI 请求失败（${status}）`);
       await ended; if (!parser.done) throw new Error('回答连接中断，请重试'); this.recordUsage(parser.usage); return parser;
     } finally { req.destroy(); this.pending.delete(req); this.aborts.delete(abort); }
+  }
+  async assistantReadSlide(store: LocalStore, slide: Slide, course: Course): Promise<string> {
+    const apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 DeepSeek API 密钥');
+    const value = await this.readSlide(slide, store, apiKey, course); return value.text;
+  }
+  async assistantTurn(store: LocalStore, model: string, messages: AiMessage[], changed: (text: string) => void): Promise<AiStream> {
+    const apiKey = await AiClient.savedKey(); if (!apiKey) throw new Error('请先设置 DeepSeek API 密钥');
+    if (!model || model.length > 100 || messages.length > 200 || JSON.stringify(messages).length > 1024 * 1024) throw new Error('助手请求超出限制');
+    this.usageStore = store;
+    const template = '{"model":"","messages":[],"max_tokens":16384,"stream":true,"thinking":{"type":"enabled"},"tools":[{"type":"function","function":{"name":"app_do","description":"执行应用内操作，参数需要符合操作说明","parameters":{"type":"object","properties":{"action":{"type":"string","enum":["state","navigate","back","list_courses","refresh_history","open_course","seek","toggle_pane","set_study_option","read_transcript","read_slide","list_notes","read_note","open_note","download_status","download_lesson","control_download","set_collection"]},"argument":{"type":"string"}},"required":["action"]}}}]}';
+    const body = JSON.parse(template) as StreamRequest; body.model = model; body.messages = messages;
+    return await this.stream(apiKey, body, changed);
   }
   async ask(store: LocalStore, slides: Slide[], lines: Transcript[], question: string, at: number, whole: boolean, model: string, history: ChatTurn[], progress: (value: string) => void, mode: string = 'auto', currentId: string = '', changed: (answer: string) => void = () => {}, selectedIds: string[] = [], prior: PriorCourseContext | undefined = undefined, loadContext: (() => Promise<CourseMaterials>) | undefined = undefined, onScope: (whole: boolean, expanded: boolean) => void = () => {}): Promise<string> {
     this.usageStore = store;

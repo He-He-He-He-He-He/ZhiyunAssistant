@@ -42,3 +42,24 @@ test('thinking-mode reasoning is carried forward during tool calls', async () =>
   const runner = new AppAssistantRunner(actions, { turn: async messages => { if (round++ === 0) return { answer: '', reasoning_content: stream.reasoning, calls: [{ id: '1', function: { name: 'app_do', arguments: '{"action":"open","args":{}}' } }] }; assert.equal(messages.find(item => item.tool_calls)?.reasoning_content, 'step'); return { answer: '完成', calls: [] }; } }, () => 'a');
   assert.equal(await runner.run('打开'), '完成');
 });
+
+test('previous conversations are reference data rather than incomplete thinking-mode assistant messages', async () => {
+  const actions = new AppActions(); let sent: AssistantMessage[] = [];
+  const runner = new AppAssistantRunner(actions, { turn: async messages => { sent = messages; return { answer: '继续', calls: [] }; } }, () => 'a');
+  await runner.run('继续', [{ role: 'user', content: '上一问' }, { role: 'assistant', content: '上一答' }]);
+  assert.equal(sent.filter(item => item.role === 'assistant').length, 0); assert.match(sent[1].content || '', /上一答/);
+});
+
+test('assistant slide reading reuses the existing per-slide recognition path', async () => {
+  const saved = AiClient.savedKey; AiClient.savedKey = async () => 'synthetic-only';
+  try { const client: any = new AiClient(), store = {}, slide = { id: 'p1' }, course = { subId: 'lesson' }; let received: unknown[] = [];
+    client.readSlide = async (...args: unknown[]) => { received = args; return { text: '识图结果', version: 'fixture' }; };
+    assert.equal(await client.assistantReadSlide(store, slide, course), '识图结果'); assert.equal(received[0], slide); assert.equal(received[1], store); assert.equal(received[3], course);
+  } finally { AiClient.savedKey = saved; }
+});
+
+test('failed operations cannot be reported as completed by the model', async () => {
+ const actions = new AppActions(); let round = 0; actions.register({name:'open',description:'',parameters:{type:'object'},run:()=>{throw new Error('无权限');}});
+ const runner = new AppAssistantRunner(actions,{turn:async()=>round++?{answer:'已经全部完成',calls:[]}:{answer:'',calls:[{id:'one',function:{name:'app_do',arguments:'{"action":"open","args":{}}'}}]}},()=> 'a');
+ assert.match(await runner.run('打开'),/部分操作未完成/);
+});

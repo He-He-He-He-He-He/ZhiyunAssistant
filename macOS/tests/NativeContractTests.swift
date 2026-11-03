@@ -434,6 +434,9 @@ final class SyntheticCourseProtocol:URLProtocol {
         let unavailable=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:502,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"text/html"])!
         check(!authenticationExpired(unavailable,Data("<!doctype html>gateway unavailable".utf8)),"server HTML errors are not misidentified as authentication failures")
         let jsonResponse=HTTPURLResponse(url:URL(string:"https://classroom.zju.edu.cn/courseapi/test")!,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Type":"application/json"])!
+        check(authenticationExpired(jsonResponse,Data(#"{"result":{"err":true,"errMsg":"请先登录","data":null}}"#.utf8)),"explicit nested session error initiates recovery")
+        check(!authenticationExpired(jsonResponse,Data(#"{"result":{"err":true,"errMsg":"没有课程权限","data":null}}"#.utf8)),"nested course permission denial never triggers login retry")
+        check(!authenticationExpired(jsonResponse,Data(#"{"code":403,"result":{"err":true,"errMsg":"请先登录"}}"#.utf8)),"explicit permission denial takes precedence over authentication hints")
         check(authenticationExpired(jsonResponse,Data(#"{"code":0,"result":{"code":401}}"#.utf8)),"nested session expiry is recognized before schedule parsing latches recovery")
         check(authenticationExpired(jsonResponse,Data(#"{"data":{"data":{"code":"401"}}}"#.utf8)),"string expiry codes inside nested service envelopes are recognized")
         check(!authenticationExpired(jsonResponse,Data(#"{"code":403,"result":{"code":401}}"#.utf8)),"nested codes never override an explicit permission denial")

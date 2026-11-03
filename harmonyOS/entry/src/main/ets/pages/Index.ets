@@ -1,5 +1,7 @@
 import { ExpandedSlide } from '../components/ExpandedSlide';
+import { AppAssistant } from '../components/AppAssistant';
 import { ChatStore } from '../services/ChatStore';
+import { NotesStore } from '../services/NotesStore';
 import { SummaryCache } from '../services/SummaryCache';
 import { ReturnAction } from '../components/ReturnAction';
 import { AiClient } from '../services/AiClient';
@@ -29,7 +31,7 @@ import { PrivacyService } from '../services/PrivacyService';
 import { LessonDownload } from '../components/LessonDownload';
 import { CacheSettings } from '../components/CacheSettings';
 import { NotesLibrary } from '../components/NotesLibrary';
-import { LessonNote, NotesController, NoteInsertion } from '../model/Notes';
+import { LessonNote, NoteAtom, NotesController, NoteInsertion } from '../model/Notes';
 import { window, promptAction } from '@kit.ArkUI';
 import { MediaSource } from '../model/Media';
 import { PlaybackController, PlaybackState } from '../services/PlaybackController';
@@ -49,7 +51,7 @@ import { inspectLoginScript, submitLoginScript, officialDigitScript, officialLog
 import { common } from '@kit.AbilityKit';
 import { webview } from '@kit.ArkWeb';
 import { Account, Course, copyStringMap, Slide, Transcript, PageGroup, phase, shanghaiDate, clockTime, stamp, distinctSlides, groupPages, mergeSlides, mergeLines, reconcileLines, pageCapacity, selectedAfterUpdate, visiblePageGroups, spreadStart } from '../model/Timeline';
-import { Zhiyun, SubInfo, AccessDenied } from '../services/Zhiyun';
+import { Zhiyun, SubInfo, AccessDenied, HistoryState } from '../services/Zhiyun';
 import { LocalStore, Snapshot, key } from '../services/LocalStore';
 import { LearningProgress, readLearningProgress, progressPage } from '../model/LearningProgress';
 import { TranscriptPane } from '../components/TranscriptPane';
@@ -64,6 +66,12 @@ import { LayoutPanel } from '../components/LayoutPanel';
 interface StudyReturnPoint { subId: string; at: number; slideId: string; following: boolean; followVideo: boolean; followTranscript: boolean; summary?: SummaryView; reference?: NoteContentReference }
 interface SavedPaneLayouts { profiles: Record<string, PaneRect[]>; locks?: Record<string, boolean> }
 interface LoginStatus { ready: boolean; captcha: boolean; error: string }
+interface AssistantCourseRecord { id: string; title: string; start: number; end: number }
+interface AssistantTranscriptRecord { time: number; text: string }
+interface AssistantSlideRecord { id: string; page: number; time: number }
+interface AssistantNoteRecord { id: string; title: string; course: string; start: number; updated: number }
+interface AssistantNoteAtom { kind: string; time: number; text: string; partial: boolean }
+interface AssistantDownloadRecord { id: string; course: string; state: string; progress: number; message: string }
 
 interface CourseJump { course: Course; at: number; video: boolean; offline?: OfflineCourse; summary?: SummaryView; panes?: PaneChoices; rects?: PaneRect[]; slideId?: string; activePane?: string; following?: boolean; followVideo?: boolean; followTranscript?: boolean }
 @Entry
@@ -125,6 +133,9 @@ struct Index {
   @State imageUris: Record<string, string> = {};
   @State windowWidth: number = 1000;
   @State windowHeight: number = 700;
+  @State assistantRect: PaneRect = { id: 'assistant', x: 0.59, y: 0.17, w: 0.39, h: 0.8, z: 0 };
+  @State assistantEditing: boolean = false;
+  private assistantRectInitialized: boolean = false;
   @State capacity: number = 1;
   @State demo: boolean = false;
   @State @Watch('rotationWatch') showVideo: boolean = false;
@@ -180,6 +191,8 @@ struct Index {
     if (direction === 'portrait') { this.gravitySuppressed = false; if (this.videoFullscreen) this.fullscreen(false, true); }
     else if (!this.gravitySuppressed && this.showVideo && this.foreground) this.fullscreen(true, true);
   };
+  @State appAssistantOpen: boolean = false;
+  @State assistantClearRevision: number = 0;
   @State aiOpen: boolean = false;
   @State aiCreated: boolean = false;
   @State notesOpen: boolean = false;
@@ -750,7 +763,7 @@ struct Index {
   @State activePane: string = 'slides';
   private activatePane(id: string): void {
     NativeSelections.clearExcept(id);
-    this.activePane = id;
+    this.activePane = id; this.assistantEditing = false;
     if (this.editingPane && this.editingPane !== id) this.editingPane = ''; if (!this.videoFullscreen && !this.paneFront(id)) this.paneRects = reorderPanes(this.paneRects, id, 'top'); }
   private setPane(rect: PaneRect): void {
     if (this.layoutLocked) return;
@@ -1085,6 +1098,133 @@ struct Index {
     this.privacyOpen = false; this.layoutOpen = false; this.overview = false; this.aiPagePicker = false; this.slideFullscreen = false; this.settingsCustomizeOpen = false; this.lessonDownloadOpen = false;
     this.offlineReturn = false; this.catalogAt = 0; this.forcePermissionRefresh = true;
     if (this.screen === 'lesson' || this.screen === 'waiting') this.home(); else this.resume();
+  }
+  private assistantActionEpoch: number = 0;
+  private assistantScanner: Zhiyun | undefined = undefined;
+  private assistantVision: AiClient | undefined = undefined;
+  private stopAssistantAction(): void { this.assistantActionEpoch++; this.assistantScanner?.cancel(); this.assistantScanner = undefined; this.assistantVision?.cancel(); this.assistantVision = undefined; }
+  private assistantCourses(): Course[] {
+    const rows: Course[] = this.courses.slice(); const cached = this.store?.loadMyAttendance();
+    if (cached) for (const course of cached.courses) if (!rows.some((row: Course) => row.subId === course.subId)) rows.push(course);
+    return rows;
+  }
+  private async assistantCheckPermission(course: Course, epoch: number): Promise<void> {
+    if (this.offlineViewing) return;
+    const checker = new Zhiyun(); this.assistantScanner = checker;
+    try { await checker.checkCurrentPermission(course); } finally { checker.cancel(); if (this.assistantScanner === checker) this.assistantScanner = undefined; }
+    if (epoch !== this.assistantActionEpoch || this.course?.subId !== course.subId) throw new Error('任务已停止或课程已切换');
+  }
+  private async assistantExecute(action: string, argument: string): Promise<string> {
+    if (!this.account || !this.privacyAccepted) throw new Error('请先登录');
+    if (action === 'state') {
+      const offset = argument ? Number(argument) : 0; if (!Number.isInteger(offset) || offset < 0) throw new Error('课件起点无效');
+      return JSON.stringify({ screen: this.screen, course: this.course?.title || '', page: this.selected + 1, video: this.showVideo, totalSlides: this.slides.length, nextSlide: offset + 100 < this.slides.length ? offset + 100 : -1, slides: this.slides.slice(offset, offset + 100).map((slide: Slide, index: number): AssistantSlideRecord => { return { id: slide.id, page: offset + index + 1, time: slide.t }; }) });
+    }
+    if (action === 'list_courses') {
+      const cached = this.store?.loadMyAttendance(), parts = argument.split('|'), filter = parts[0].trim().toLowerCase(), offset = parts.length > 1 ? Number(parts[1]) : 0;
+      if (!Number.isInteger(offset) || offset < 0) throw new Error('课程列表起点无效');
+      const rows = this.assistantCourses().filter((course: Course): boolean => !filter || course.title.toLowerCase().includes(filter));
+      return JSON.stringify({ complete: cached?.complete || false, total: rows.length, next: offset + 50 < rows.length ? offset + 50 : -1, courses: rows.slice(offset, offset + 50).map((c: Course): AssistantCourseRecord => { return { id: c.subId, title: c.title, start: c.start, end: c.end }; }) });
+    }
+    if (action === 'refresh_history') {
+      const account = this.account, store = this.store; if (!account || !store || !store.belongsTo(account.id)) throw new Error('账号不可用');
+      const cached = store.loadMyAttendance(); const initial: HistoryState = { courses: this.assistantCourses(), cursor: cached?.cursor || '', emptyWindows: 0, complete: cached?.complete || false };
+      const scanner = new Zhiyun(), epoch = this.assistantActionEpoch; this.assistantScanner = scanner;
+      try {
+        const result = await scanner.attendanceHistory(account, (_done: number, _total: number, progress?: HistoryState) => { if (progress && epoch === this.assistantActionEpoch && this.account?.id === account.id && this.store === store) store.saveMyAttendance(progress.courses, progress.cursor, progress.complete); }, initial);
+        if (epoch !== this.assistantActionEpoch || this.account?.id !== account.id || this.store !== store) throw new Error('任务已停止或账号已切换');
+        store.saveMyAttendance(result.courses, result.cursor, result.complete); return JSON.stringify({ total: result.courses.length, complete: result.complete, failed: result.failed });
+      } finally { scanner.cancel(); if (this.assistantScanner === scanner) this.assistantScanner = undefined; }
+    }
+    if (action === 'back') { this.onBackPress(); return '{"ok":true}'; }
+    if (action === 'navigate') {
+      if (!['home', 'plaza', 'favourite', 'later', 'offline', 'notes', 'cache'].includes(argument)) throw new Error('页面名称无效');
+      if (this.screen !== 'home') this.home();
+      if (argument === 'plaza') { this.openHomePage(''); this.plaza = true; }
+      else this.openHomePage(argument === 'home' ? '' : argument);
+      return JSON.stringify({ page: argument });
+    }
+    if (action === 'open_course') {
+      const matches = this.assistantCourses().filter((c: Course) => c.subId === argument || c.title === argument);
+      if (matches.length !== 1) throw new Error(matches.length ? '有多个同名课次，请指定课次ID' : '没有找到该课次，请先查询课程');
+      await this.enter(matches[0]); return JSON.stringify({ course: matches[0].title, id: matches[0].subId, status: '正在进入，请等待课程同步并确认权限' });
+    }
+    if (action === 'read_transcript') {
+      const course = this.course, store = this.store, epoch = this.assistantActionEpoch; if (!course || !store) throw new Error('请先进入课程');
+      const offset = argument ? Number(argument) : 0; if (!Number.isInteger(offset) || offset < 0) throw new Error('转写起点无效');
+      await this.assistantCheckPermission(course, epoch); if (this.store !== store) throw new Error('账号已切换');
+      return JSON.stringify({ course: course.title, total: this.lines.length, next: offset + 50 < this.lines.length ? offset + 50 : -1, lines: this.lines.slice(offset, offset + 50).map((line: Transcript): AssistantTranscriptRecord => { return { time: line.t, text: line.text }; }) });
+    }
+    if (action === 'read_slide') {
+      const course = this.course, store = this.store, slide = this.slides.find((item: Slide): boolean => item.id === argument), epoch = this.assistantActionEpoch;
+      if (!course || !store || !slide) throw new Error('当前课程没有该课件，请先查询课件编号');
+      await this.assistantCheckPermission(course, epoch); if (this.store !== store) throw new Error('账号已切换');
+      const client = new AiClient(); this.assistantVision = client;
+      try { const text = await client.assistantReadSlide(store, slide, course); if (epoch !== this.assistantActionEpoch || this.store !== store || this.course?.subId !== course.subId) throw new Error('任务已停止或课程已切换'); return JSON.stringify({ text: text }); }
+      finally { client.cancel(); if (this.assistantVision === client) this.assistantVision = undefined; }
+    }
+    if (action === 'list_notes') {
+      if (!this.store) throw new Error('本机笔记不可用');
+      const parts = argument.split('|'), filter = parts[0].trim().toLowerCase(), offset = parts.length > 1 ? Number(parts[1]) : 0;
+      if (!Number.isInteger(offset) || offset < 0) throw new Error('笔记列表起点无效');
+      const notes = new NotesStore(this.store).list().filter((note: LessonNote): boolean => !filter || (note.title || '').toLowerCase().includes(filter) || note.course.title.toLowerCase().includes(filter));
+      return JSON.stringify({ total: notes.length, next: offset + 30 < notes.length ? offset + 30 : -1, notes: notes.slice(offset, offset + 30).map((note: LessonNote): AssistantNoteRecord => { return { id: note.course.subId + ':' + (note.id || 'default'), title: note.title || '课堂笔记', course: note.course.title, start: note.course.start, updated: note.openedAt || note.savedAt }; }) });
+    }
+    if (action === 'read_note' || action === 'open_note') {
+      if (!this.store) throw new Error('本机笔记不可用'); const parts = argument.split('|'), id = parts[0]; let offset = parts.length > 1 ? Number(parts[1]) : 0, charOffset = parts.length > 2 ? Number(parts[2]) : 0;
+      if (!Number.isInteger(offset) || offset < 0 || !Number.isInteger(charOffset) || charOffset < 0) throw new Error('笔记起点无效');
+      const matches = new NotesStore(this.store).list().filter((note: LessonNote): boolean => note.course.subId + ':' + (note.id || 'default') === id);
+      if (matches.length !== 1) throw new Error('没有找到笔记，请先查询笔记标识'); const note = matches[0];
+      if (action === 'open_note') { await this.openManagedNote(note); return JSON.stringify({ title: note.title || '课堂笔记', status: '正在打开笔记，请等待课程加载' }); }
+      const items: AssistantNoteAtom[] = []; let remaining = 10000;
+      while (offset < note.atoms.length && items.length < 30 && remaining > 0) { const atom: NoteAtom = note.atoms[offset], text = atom.kind === 'image' ? '[图片，未识别]' : atom.value; if (charOffset > text.length) throw new Error('笔记字符起点无效'); const chunk = text.slice(charOffset, charOffset + remaining); remaining -= chunk.length; charOffset += chunk.length; const partial = charOffset < text.length; items.push({ kind: atom.kind, time: atom.at, text: chunk, partial }); if (partial) break; offset++; charOffset = 0; }
+      return JSON.stringify({ title: note.title || '课堂笔记', total: note.atoms.length, nextOffset: offset < note.atoms.length ? offset : -1, nextCharOffset: charOffset, items: items });
+    }
+    if (action === 'download_status') {
+      const tasks = this.library?.tasks() || []; return JSON.stringify({ total: tasks.length, tasks: tasks.slice(0, 50).map((task: DownloadJob): AssistantDownloadRecord => { return { id: task.id, course: task.course.title, state: task.state, progress: task.progress, message: task.message }; }) });
+    }
+    if (action === 'download_lesson') {
+      const parts = argument.split('|'), matches = this.assistantCourses().filter((course: Course): boolean => course.subId === parts[0]);
+      if (matches.length !== 1 || !this.library) throw new Error('没有找到课次或下载功能不可用');
+      const requested = parts.length > 1 ? parts[1].split(',') : ['video', 'slides', 'transcript'];
+      if (!requested.length || requested.some((item: string): boolean => !['video', 'slides', 'transcript'].includes(item))) throw new Error('下载内容无效');
+      const options: DownloadOptions = { video: requested.includes('video'), slides: requested.includes('slides'), transcript: requested.includes('transcript') };
+      this.library.enqueue([matches[0]], options); this.refreshLibrary(); return JSON.stringify({ status: '已加入下载队列，完成前仍需确认权限和下载结果', course: matches[0].title });
+    }
+    if (action === 'control_download') {
+      const parts = argument.split('|'), id = parts[0], command = parts[1]; if (!this.library || !this.library.tasks().some((job: DownloadJob): boolean => job.course.subId === id)) throw new Error('没有找到下载任务');
+      if (command === 'pause') this.library.pauseJob(id); else if (command === 'resume') this.library.resumeJob(id); else if (command === 'retry') this.library.retryJob(id); else throw new Error('下载操作无效');
+      this.refreshLibrary(); return '{"status":"已请求更新下载任务"}';
+    }
+    if (action === 'set_collection') {
+      const parts = argument.split('|'), matches = this.assistantCourses().filter((course: Course): boolean => course.subId === parts[0]);
+      if (matches.length !== 1 || !['favorite', 'later'].includes(parts[1]) || !['on', 'off'].includes(parts[2])) throw new Error('收藏参数无效');
+      const course = matches[0], kind = parts[1] === 'later' ? 'later' : 'favourite', target = parts[2] === 'on', selected = this.collections.hasLesson(kind, course), epoch = this.assistantActionEpoch, owner = this.account.id;
+      if (selected !== target) {
+        if (selected) { const choice = await this.getUIContext().getPromptAction().showDialog({ title: kind === 'later' ? '取消稍后再看？' : '取消收藏？', message: course.title, buttons: [{ text: '保留', color: '#71839A' }, { text: '取消', color: '#168BEE' }] }); if (choice.index !== 1) return '{"status":"已取消操作"}'; }
+        if (epoch !== this.assistantActionEpoch || this.account?.id !== owner || this.collections.hasLesson(kind, course) !== selected) throw new Error('任务已停止或状态已改变');
+        this.collections.toggleLesson(kind, course);
+      }
+      return JSON.stringify({ enabled: this.collections.hasLesson(kind, course), title: course.title });
+    }
+    if (action === 'seek') {
+      const seconds = Number(argument); if (!this.course || !Number.isFinite(seconds) || seconds < 0 || seconds > this.lessonDuration()) throw new Error('跳转时间无效');
+      this.jumpToTime(seconds); return JSON.stringify({ seconds: seconds });
+    }
+    if (action === 'set_study_option') {
+      const parts = argument.split(':'), option = parts[0], desired = parts.length > 1 ? parts[1] : '';
+      if (!this.course || !['borders', 'merge', 'skip', 'smartSkip'].includes(option) || (desired !== 'on' && desired !== 'off')) throw new Error('学习选项参数无效');
+      const target = desired === 'on'; if (this.featureChecked(option) !== target) this.featureAction(option);
+      const actual = this.featureChecked(option); return JSON.stringify({ option: option, enabled: actual, requested: target, status: actual === target ? '已更新' : '可能需要用户确认或等待处理' });
+    }
+    if (action === 'toggle_pane') {
+      const parts = argument.split(':'), pane = parts[0], desired = parts.length > 1 ? parts[1] : '';
+      if (!this.course || !['slides', 'transcript', 'video', 'notes', 'ai', 'summary'].includes(pane) || (desired && desired !== 'on' && desired !== 'off')) throw new Error('功能区参数无效');
+      const current = this.featureChecked(pane), target = desired ? desired === 'on' : !current;
+      if (current !== target) { if (pane === 'video') { await this.toggleVideo(); this.savePaneChoices(); } else this.featureAction(pane); }
+      return JSON.stringify({ pane: pane, enabled: this.featureChecked(pane), requested: target, message: this.message });
+    }
+    throw new Error('应用没有提供此操作');
   }
   private openHomePage(page: string): void { if (page === 'favourite' || page === 'later') this.collectionRootSequence++; this.collectionPage = page === 'favourite' || page === 'later' ? page : ''; this.collectionBackSequence = 0; this.notesBackSequence = 0; this.cacheBackSequence = 0; this.notesLibrary = page === 'notes'; this.offlineOpen = page === 'offline'; this.cacheSettings = page === 'cache'; this.plaza = false; this.allCoursesOpen = false; if (this.offlineOpen) this.refreshLibrary(); if (!page) this.resume(); }
   private openDownload(courses: Course[], scoped: boolean = false): void {
@@ -1490,6 +1630,10 @@ struct Index {
   private enlargedSlide() {
     ExpandedSlide({ slideId: this.expandedSlideId, uri: this.imageUris[this.expandedSlideId] || '', onTurn: (direction: number) => this.turnExpandedSlide(direction), onClose: () => this.slideFullscreen = false })
   }
+  @Builder
+  private appAssistantContent() {
+    if (this.account) { AppAssistant({ open: $appAssistantOpen, accountId: this.account.id, clearRevision: this.assistantClearRevision, store: this.store, onExecute: (action: string, argument: string): Promise<string> => this.assistantExecute(action, argument), onStop: () => this.stopAssistantAction(), onEditingFocus: (focused: boolean) => this.editorFocus('appAssistant', focused) }) }
+  }
   build() {
     Stack() {
     Column() {
@@ -1501,7 +1645,7 @@ struct Index {
           Button('登录').height(28).fontSize(11).backgroundColor('#EEE5D8').fontColor('#8C653D').onClick(() => { this.beginLogin(); })
         }.padding({ left: 16, right: 16, bottom: 10 }).width('100%')
       }
-      if (this.cacheSettings && this.screen === 'home') { CacheSettings({ backSequence: this.cacheBackSequence, store: this.store, onClose: () => this.openHomePage('') }).layoutWeight(1) }
+      if (this.cacheSettings && this.screen === 'home') { CacheSettings({ backSequence: this.cacheBackSequence, store: this.store, onClose: () => this.openHomePage(''), onAssistantCleared: () => this.assistantClearRevision++ }).layoutWeight(1) }
       else if (this.notesLibrary && this.screen === 'home') { NotesLibrary({ onOpen: (note: LessonNote) => this.openManagedNote(note), account: this.account, backSequence: this.notesBackSequence, store: this.store, onClose: () => this.openHomePage('') }).layoutWeight(1) }
       else if (this.offlineOpen && this.screen === 'home') { OfflineScreen({ concurrency: this.library?.concurrency() || 1, onConcurrency: (count: number) => this.library?.setConcurrency(count), onPauseJob: (id: string) => this.library?.pauseJob(id), onResumeJob: (id: string) => this.library?.resumeJob(id), onMoveJob: (id: string, direction: number) => this.library?.moveJob(id, direction), collections: this.collections, collectionRevision: this.collectionRevision, entries: this.offlineEntries, jobs: this.downloadJobs, onDeleteMany: (ids: string[]) => this.library?.removeMany(ids).catch(() => this.getUIContext().getPromptAction().showToast({ message: '删除未完成，请重试', duration: 2000 })), onClose: () => this.openHomePage(''), onOpen: (entry: OfflineCourse) => this.openOffline(entry), onPause: () => this.library?.pause(), onResume: () => this.library?.resume(), onDelete: (entry: OfflineCourse) => this.library?.remove(entry.course.subId).catch(() => this.getUIContext().getPromptAction().showToast({ message: '删除未完成，请重试', duration: 2000 })), onSaveAvailable: (subId: string) => this.library?.saveAvailable(subId), onRetry: (job: DownloadJob) => this.library?.retryJob(job.course.subId), onDeleteJob: (subId: string) => this.library?.remove(subId).catch(() => this.getUIContext().getPromptAction().showToast({ message: '删除未完成，请重试', duration: 2000 })) }).layoutWeight(1) }
       else if (this.screen === 'login') { this.loginView() }
@@ -1522,7 +1666,7 @@ struct Index {
       }
     }.width('100%').height('100%').backgroundColor(this.videoFullscreen ? '#000000' : '#F1F3F5').padding(this.videoFullscreen ? 0 : { top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight })
       .onAreaChange((oldArea: Area, newArea: Area) => {
-        const width = Number(newArea.width), height = Number(newArea.height); if (width !== this.windowWidth || height !== this.windowHeight) { this.windowWidth = width; this.windowHeight = height; this.resize(); }
+        const width = Number(newArea.width), height = Number(newArea.height); if (width !== this.windowWidth || height !== this.windowHeight) { this.windowWidth = width; this.windowHeight = height; if (!this.assistantRectInitialized && width > 0 && height > 100) { const w = Math.min(390, width - 24), h = Math.min(560, height - 100); this.assistantRect = { id: 'assistant', x: Math.max(0, (width - w - 12) / width), y: Math.max(0, (height - h - 18) / height), w: w / width, h: h / height, z: 0 }; this.assistantRectInitialized = true; } this.resize(); }
       })
       if (this.overview && this.screen === 'lesson' && this.slidesEnabled) {
       SlideOverview({ skipModes: this.smartSkip, mergeDuplicates: this.mergeDuplicateSlides, onMerge: () => this.toggleDuplicateSlides(), groups: visiblePageGroups(this.groups, this.skipEmpty, Number(this.info?.sub_status) === 1), slides: this.presentationSlides(), imageUris: this.imageUris, skipEmpty: this.skipEmpty, selectedId: this.groups[this.selected]?.slide.id || '', onSkip: () => this.toggleSkipEmpty(), onClose: () => this.overview = false, onSelect: (slide: Slide) => { this.chooseSlide(slide); this.overview = false; }, onLoad: (slide: Slide) => this.queueImage(slide) }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#F1F3F5')
@@ -1536,6 +1680,11 @@ struct Index {
     if (this.privacyOpen) { PrivacyPage({ consentRequired: !this.privacyAccepted, onClose: () => this.privacyOpen = false, onAccept: () => { this.privacyAccepted = true; this.privacyOpen = false; this.restoreAccount(); }, onWithdraw: () => { new PrivacyService(this.getUIContext().getHostContext() as common.UIAbilityContext).withdraw(); this.logout(); this.privacyAccepted = false; this.privacyOpen = true; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#F1F3F5') }
     if (this.lessonDownloadOpen) { LessonDownload({ course: this.course, onClose: () => this.lessonDownloadOpen = false, onDownload: (options: DownloadOptions) => { if (this.course) this.library?.enqueue([this.course], options); this.lessonDownloadOpen = false; this.getUIContext().getPromptAction().showToast({ message: '已添加本节课下载任务', duration: 2000 }); } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }) }
     if (this.downloadsOpen) { DownloadSheet({ discoveries: this.downloadDiscovered, discovering: this.downloadScopeChecking, onRefreshScope: () => this.downloadScopeRefresh++, scoped: this.downloadScoped, backSequence: this.downloadBackSequence, fullPage: true, courses: this.downloadCourses, account: this.account, store: this.store, onClose: () => this.downloadsOpen = false, onDownload: (courses: Course[], options: DownloadOptions) => { this.library?.enqueue(courses, options); this.offlineOpen = this.screen === 'home'; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#F1F3F5') }
+    if (this.account && this.privacyAccepted && !this.videoFullscreen) {
+      PaneFrame({ rect: this.assistantRect, canvasWidth: this.windowWidth, canvasHeight: this.windowHeight, controls: this.appAssistantOpen, adjustable: this.appAssistantOpen, selected: this.assistantEditing, backgroundFocus: false, onSelect: () => { this.assistantEditing = true; this.editingPane = ''; }, onChange: (rect: PaneRect) => { this.assistantRect = normalizePane(rect); }, content: () => { this.appAssistantContent(); } })
+        .width(this.appAssistantOpen ? Math.max(1, this.assistantRect.w * this.windowWidth) : 120).height(this.appAssistantOpen ? Math.max(1, this.assistantRect.h * this.windowHeight) : 48)
+        .position({ x: this.appAssistantOpen ? this.assistantRect.x * this.windowWidth : Math.max(12, this.windowWidth - 132), y: this.appAssistantOpen ? this.assistantRect.y * this.windowHeight : Math.max(56, this.windowHeight - 70) }).zIndex(900)
+    }
     }.width('100%').height('100%').onKeyEvent((event: KeyEvent): boolean => this.keyboard(event)).backgroundColor(this.videoFullscreen ? '#000000' : '#F1F3F5').expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
   }
 }

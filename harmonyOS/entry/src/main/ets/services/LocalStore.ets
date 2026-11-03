@@ -40,6 +40,7 @@ export class LocalStore implements PermissionStorage {
   saveFeature(kind: string, name: string, value: string, revision: number = this.cache.revision(kind)): void { if (this.currentCourse) this.cache.save(kind, this.currentCourse, name, value, revision); }
   private registerImage(url: string, uri: string, course: Course | undefined): void { if (course && uri) { this.cache.remember('slides', course, new fileUri.FileUri(uri).path); const meta = this.imageFolder + '/' + key(url) + '.meta.json'; if (fs.accessSync(meta)) this.cache.remember('slides', course, meta); } }
   get dataFolder(): string { return this.folder; }
+  belongsTo(accountId: string): boolean { return this.accountId === accountId; }
   private permissions: Map<string, PermissionRecord> = new Map();
   private pending: Set<http.HttpRequest> = new Set();
   private cancelVersion: number = 0;
@@ -114,12 +115,15 @@ export class LocalStore implements PermissionStorage {
   private metadataTransient: Map<string, string> = new Map();
   catalogueCacheEnabled(): boolean { return this.readJson('cache-catalogue-save.txt') !== 'false'; }
   runtimeCacheEnabled(): boolean { return this.readJson('cache-runtime-save.txt') !== 'false'; }
+  assistantCacheEnabled(): boolean { return this.readJson('cache-assistant-save.txt') !== 'false'; }
+  setAssistantCacheEnabled(value: boolean): void { this.saveJson('cache-assistant-save.txt', String(value)); }
   setCatalogueCacheEnabled(value: boolean): void { this.saveJson('cache-catalogue-save.txt', String(value)); }
   setRuntimeCacheEnabled(value: boolean): void { this.saveJson('cache-runtime-save.txt', String(value)); }
   private treeBytes(path: string): number { try { const stat = fs.statSync(path); if (!stat.isDirectory()) return stat.size; return fs.listFileSync(path).reduce((bytes: number, name: string) => bytes + this.treeBytes(path + '/' + name), 0); } catch (_) { return 0; } }
   extraCaches(kind: string): ExtraCacheEntry[] {
     const rows: ExtraCacheEntry[] = [];
     if (kind === 'catalogue') { try { fs.listFileSync(this.folder).filter((name: string) => catalogueCacheFile(name)).forEach((name: string) => rows.push({ id: name, label: name === 'permissions-v1.json' ? '访问权限记录' : name.includes('attendance') ? '已上课程目录' : name.startsWith('plaza-') ? '课程广场列表' : '课次目录', paths: [this.folder + '/' + name], bytes: this.treeBytes(this.folder + '/' + name) })); } catch (_) {} }
+    if (kind === 'assistant') { const path = this.folder + '/app-assistant-history-v1.json'; try { if (fs.accessSync(path)) rows.push({ id: 'history', label: '应用助手对话记录', paths: [path], bytes: this.treeBytes(path) }); } catch (_) {} }
     if (kind === 'runtime') {
       const directories = [this.context.cacheDir, this.context.tempDir].filter((directory: string, index: number, all: string[]) => !!directory && all.indexOf(directory) === index);
       directories.forEach((directory: string) => { try { fs.listFileSync(directory).forEach((name: string) => { const path = directory + '/' + name; const protectedTransfer = Array.from(LocalStore.activeTransfers).some((active: string) => path === active || active.startsWith(path + '/'));
@@ -142,7 +146,7 @@ export class LocalStore implements PermissionStorage {
     });
     if (failed) throw new Error('部分运行文件正在使用，稍后可继续清理');
   }
-  clearAllCaches(): void { this.cancel(); ['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip'].forEach((kind: string) => this.cache.clear(kind)); this.cache.clearTransient(); this.cropResults.clear(); this.checkedImages.clear(); let failed = false; ['catalogue', 'legacy', 'runtime'].forEach((kind: string) => { try { this.clearExtraCaches(kind); } catch (_) { failed = true; } }); if (['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip'].some((kind: string) => this.cache.bytes(kind) > 0)) failed = true; if (failed) throw new Error('部分缓存未能清理'); }
+  clearAllCaches(): void { this.cancel(); ['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip'].forEach((kind: string) => this.cache.clear(kind)); this.cache.clearTransient(); this.cropResults.clear(); this.checkedImages.clear(); let failed = false; ['catalogue', 'legacy', 'runtime', 'assistant'].forEach((kind: string) => { try { this.clearExtraCaches(kind); } catch (_) { failed = true; } }); if (['slides', 'transcript', 'video', 'chat', 'summary', 'vision', 'smartSkip'].some((kind: string) => this.cache.bytes(kind) > 0)) failed = true; if (failed) throw new Error('部分缓存未能清理'); }
   private writeJson(name: string, value: string): void {
     if (catalogueCacheFile(name) && !this.catalogueCacheEnabled()) { this.metadataTransient.set(name, value); return; }
     const path = this.folder + '/' + name;

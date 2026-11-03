@@ -8,10 +8,11 @@ export struct CacheSettings {
   @Prop @Watch('systemBack') backSequence: number = 0;
   store: LocalStore | undefined = undefined;
   onClose: () => void = () => {};
+  onAssistantCleared: () => void = () => {};
   @State extraRows: ExtraCacheEntry[] = [];
-  private extraKind(): boolean { return ['catalogue', 'legacy', 'runtime'].includes(this.category); }
-  private extraLabel(kind: string): string { return kind === 'catalogue' ? '课表与访问状态' : kind === 'legacy' ? '历史遗留缓存' : '网页资源与临时文件'; }
-  private explanation(kind: string): string { return kind === 'slides' ? '已浏览课件原图、去黑边图片和重复页识别数据' : kind === 'transcript' ? '回放转写与本机收到的直播转写' : kind === 'video' ? '在线播放产生的视频片段，不含离线下载' : kind === 'chat' ? '每节课的问答历史及回答中的引用信息' : kind === 'summary' ? '各页速览回答、历史版本和阅读位置' : kind === 'vision' ? 'AI 读过的课件文字、公式和图表，供多个功能复用' : kind === 'smartSkip' ? 'AI 判断杂音、课间等可跳过片段的结果' : kind === 'catalogue' ? '课表、搜索结果、课次目录和权限核验记录' : kind === 'legacy' ? '旧版或其他账号留下的普通缓存，不含笔记和离线课程' : '网页内核资源、应用运行临时文件；使用中可能重新产生'; }
+  private extraKind(): boolean { return ['catalogue', 'legacy', 'runtime', 'assistant'].includes(this.category); }
+  private extraLabel(kind: string): string { return kind === 'catalogue' ? '课表与访问状态' : kind === 'legacy' ? '历史遗留缓存' : kind === 'assistant' ? '应用助手对话' : '网页资源与临时文件'; }
+  private explanation(kind: string): string { return kind === 'slides' ? '已浏览课件原图、去黑边图片和重复页识别数据' : kind === 'transcript' ? '回放转写与本机收到的直播转写' : kind === 'video' ? '在线播放产生的视频片段，不含离线下载' : kind === 'chat' ? '每节课的问答历史及回答中的引用信息' : kind === 'summary' ? '各页速览回答、历史版本和阅读位置' : kind === 'vision' ? 'AI 读过的课件文字、公式和图表，供多个功能复用' : kind === 'smartSkip' ? 'AI 判断杂音、课间等可跳过片段的结果' : kind === 'assistant' ? '应用助手的历史对话，不含每节课的课程问答' : kind === 'catalogue' ? '课表、搜索结果、课次目录和权限核验记录' : kind === 'legacy' ? '旧版或其他账号留下的普通缓存，不含笔记和离线课程' : '网页内核资源、应用运行临时文件；使用中可能重新产生'; }
   private byteLabel(bytes: number): string { return bytes >= 1073741824 ? (bytes / 1073741824).toFixed(2) + ' GB' : bytes >= 1048576 ? (bytes / 1048576).toFixed(1) + ' MB' : Math.ceil(bytes / 1024) + ' KB'; }
   @State revision: number = 0;
   @State error: string = '';
@@ -26,8 +27,8 @@ export struct CacheSettings {
   private systemBack(): void { if (this.backSequence > 0) this.back(); }
   private back(): void { if (this.folderId) this.folderId = ''; else if (this.category) { this.category = ''; this.selected = []; } else this.onClose(); }
   private clear(kind: string, ids: string[] = []): void { this.store?.cache.clear(kind, ids); this.selected = []; this.update(); }
-  private clearAll(): void { try { webview.WebviewController.removeAllCache(true); this.store?.clearAllCaches(); this.selected = []; this.error = ''; } catch (_) { this.error = '部分缓存未能清理，请重试'; } this.update(); }
-  private clearExtras(kind: string, ids: string[] = []): void { try { if (kind === 'runtime') webview.WebviewController.removeAllCache(true); this.store?.clearExtraCaches(kind, ids); this.selected = []; this.error = ''; } catch (_) { this.error = '部分运行文件正在使用，稍后可继续清理'; } this.update(); }
+  private clearAll(): void { try { webview.WebviewController.removeAllCache(true); this.store?.clearAllCaches(); this.selected = []; this.error = ''; } catch (_) { this.error = '部分缓存未能清理，请重试'; } finally { this.onAssistantCleared(); } this.update(); }
+  private clearExtras(kind: string, ids: string[] = []): void { try { if (kind === 'runtime') webview.WebviewController.removeAllCache(true); this.store?.clearExtraCaches(kind, ids); this.selected = []; this.error = ''; } catch (_) { this.error = '部分运行文件正在使用，稍后可继续清理'; } finally { if (kind === 'assistant') this.onAssistantCleared(); } this.update(); }
   build() {
     Column({ space: 12 }) {
       Row({ space: 8 }) { Button('返回').height(32).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.back()); Text(this.category ? (this.extraKind() ? this.extraLabel(this.category) : cacheLabel(this.category) + '缓存') : '缓存设置').fontSize(22).fontWeight(FontWeight.Bold).fontColor('#20344D').layoutWeight(1); if (!this.category) { Button('清理全部缓存').height(32).fontSize(12).fontColor('#B44747').backgroundColor('#FCEEEE').onClick(() => this.clearAll()) } }.width('100%')
@@ -47,11 +48,11 @@ export struct CacheSettings {
               }.width('100%')
             }.padding(16).width('100%').backgroundColor('#FFFFFF').borderRadius(14)
           } }, (kind: string) => kind + ':' + this.revision)
-          ForEach(['catalogue', 'runtime', 'legacy'], (kind: string) => { ListItem() {
+          ForEach(['catalogue', 'runtime', 'legacy', 'assistant'], (kind: string) => { ListItem() {
             Column({ space: 10 }) {
               Row() { Text(this.extraLabel(kind)).fontSize(17).fontColor('#20344D').layoutWeight(1); Text(this.byteLabel((this.store?.extraCaches(kind) || []).reduce((bytes: number, entry: ExtraCacheEntry) => bytes + entry.bytes, 0))).fontSize(12).fontColor('#71839A') }.width('100%')
               Text(this.explanation(kind)).fontSize(12).fontColor('#71839A').width('100%')
-              Row({ space: 8 }) { if (kind !== 'legacy') { Toggle({ type: ToggleType.Switch, isOn: kind === 'catalogue' ? this.store?.catalogueCacheEnabled() !== false : this.store?.runtimeCacheEnabled() !== false }).selectedColor('#168BEE').onChange((value: boolean) => { if (kind === 'catalogue') this.store?.setCatalogueCacheEnabled(value); else this.store?.setRuntimeCacheEnabled(value); }); Text('保存缓存').fontSize(12).fontColor('#71839A').layoutWeight(1); } else { Text('兼容数据，仅用于清理').fontSize(12).fontColor('#71839A').layoutWeight(1) } Button('全部清理').height(32).fontSize(12).fontColor('#B44747').backgroundColor('#FCEEEE').onClick(() => this.clearExtras(kind)); Button('查看详情').height(32).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => { this.category = kind; this.selected = []; this.update(); }) }.width('100%')
+              Row({ space: 8 }) { if (kind !== 'legacy') { Toggle({ type: ToggleType.Switch, isOn: kind === 'catalogue' ? this.store?.catalogueCacheEnabled() !== false : kind === 'assistant' ? this.store?.assistantCacheEnabled() !== false : this.store?.runtimeCacheEnabled() !== false }).selectedColor('#168BEE').onChange((value: boolean) => { if (kind === 'catalogue') this.store?.setCatalogueCacheEnabled(value); else if (kind === 'assistant') this.store?.setAssistantCacheEnabled(value); else this.store?.setRuntimeCacheEnabled(value); }); Text('保存缓存').fontSize(12).fontColor('#71839A').layoutWeight(1); } else { Text('兼容数据，仅用于清理').fontSize(12).fontColor('#71839A').layoutWeight(1) } Button('全部清理').height(32).fontSize(12).fontColor('#B44747').backgroundColor('#FCEEEE').onClick(() => this.clearExtras(kind)); Button('查看详情').height(32).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => { this.category = kind; this.selected = []; this.update(); }) }.width('100%')
               if (kind === 'runtime') { Text('网页内核缓存由系统管理，清理时会一并清除；上方显示可统计的临时文件大小。').fontSize(12).fontColor('#71839A').width('100%') }
             }.padding(16).width('100%').backgroundColor('#FFFFFF').borderRadius(14)
           } }, (kind: string) => kind + ':' + this.revision)
