@@ -106,6 +106,16 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(vault.read()==prior,"logout marker suppresses observer writes and remembered auto-login")
     }
     static func main()throws{
+        if ProcessInfo.processInfo.environment["ZHIYUN_KEYCHAIN_INTEGRATION"] == "1" {
+            let name="integration-"+UUID().uuidString,secret=Data("synthetic-keychain-check".utf8)
+            defer{_ = keychain(name,remove:true)}
+            var status:OSStatus?
+            guard keychain(name,secret,onError:{status=$0}) == secret,
+                  keychain(name,onError:{status=$0}) == secret else {
+                throw appError("系统钥匙串合成数据测试失败 (状态 \(status ?? 0))")
+            }
+            check(true,"real Keychain stores and reads a synthetic credential without interaction")
+        }
         if CommandLine.arguments.count==3,CommandLine.arguments[1].hasPrefix("--cold-session-"){try coldProcess(CommandLine.arguments[1],root:URL(fileURLWithPath:CommandLine.arguments[2],isDirectory:true));return}
         try sessionRepairContracts()
         for (code,expected) in [(URLError.timedOut,"网络请求超时，请稍后重试"),(.notConnectedToInternet,"当前没有网络连接，请连接网络后重试"),(.networkConnectionLost,"网络连接中断，请重试"),(.cannotFindHost,"无法解析服务器地址，请检查网络"),(.cancelled,"请求已取消"),(.serverCertificateUntrusted,"安全连接校验失败，请检查系统时间或网络")] {
