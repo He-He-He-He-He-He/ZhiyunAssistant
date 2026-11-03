@@ -1,3 +1,4 @@
+import {ReleaseUpdates} from '../services/ReleaseUpdates';
 import { KnowledgeJobs } from '../services/KnowledgeJobs';
 import { ExpandedSlide } from '../components/ExpandedSlide';
 import { AppAssistant } from '../components/AppAssistant';
@@ -348,8 +349,10 @@ struct Index {
     this.collections.onChange = () => this.collectionRevision++;
     this.privacyAccepted = new PrivacyService(this.getUIContext().getHostContext() as common.UIAbilityContext).accepted();
     this.privacyOpen = !this.privacyAccepted;
-    if (this.privacyAccepted) this.restoreAccount();
+    if (this.privacyAccepted) { this.restoreAccount(); this.checkReleaseUpdate(); }
   }
+  private lastUpdateNotice: string = '';
+  private checkReleaseUpdate(): void { new ReleaseUpdates(this.getUIContext().getHostContext() as common.UIAbilityContext).check(false).then(value => { if (this.privacyAccepted && value.available && value.available !== this.lastUpdateNotice) { this.lastUpdateNotice = value.available; this.getUIContext().getPromptAction().showToast({ message: '发现新版本 ' + value.available + '，可在隐私页面检查更新', duration: 3000 }); } }).catch(() => {}); }
   private async restoreAccount(): Promise<void> { const gen = this.generation; await SessionStore.restore(); const account = await SessionStore.savedAccount(); if (gen !== this.generation || !this.privacyAccepted) return; if (account && !this.account) { this.account = account; this.initializeStore(account); this.screen = 'home'; } this.resume(); }
   private initializeStore(account: Account): void {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -403,7 +406,7 @@ struct Index {
     clearTimeout(this.authTimer); clearTimeout(this.authRetry); this.screen = 'home'; this.resume();
   }
   aboutToDisappear(): void { this.saveProgress(true); this.stopGravity(); this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); this.stop(); }
-  private visibilityChanged(): void { this.rotationWatch(); if (this.foreground) this.resume(); else { KnowledgeJobs.cancel(); this.saveProgress(true); this.playback.pause(); this.library?.pause(); this.stop(); } }
+  private visibilityChanged(): void { this.rotationWatch(); if (this.foreground) { this.resume(); if (this.privacyAccepted) this.checkReleaseUpdate(); } else { KnowledgeJobs.cancel(); this.saveProgress(true); this.playback.pause(); this.library?.pause(); this.stop(); } }
   private stop(): void {
     this.cancelCameraProbe();
     if (this.course && this.screen === 'lesson' && !this.offlineViewing && !this.demo) { try { this.store?.save({ course: this.course, slides: this.slides, lines: this.lines, savedAt: Date.now() }); } catch (_) {} }
@@ -1699,7 +1702,7 @@ struct Index {
     if (this.layoutOpen) {
       LayoutPanel({ rects: this.paneRects, activeIds: this.activePanes(), locked: this.layoutLocked, onLock: () => { this.layoutLocked = !this.layoutLocked; this.editingPane = ''; }, onSelect: (id: string) => { this.activePane = id; }, onChange: (rect: PaneRect) => this.setPane(rect), onPreset: (preset: string) => this.layoutPreset(preset), onClose: () => this.layoutOpen = false, onSave: () => this.saveLayout(), onLayer: (id: string, action: string) => { if (!this.layoutLocked) this.paneRects = reorderPanes(this.paneRects, id, action); } }).width(this.windowWidth > 700 ? 520 : '94%').borderRadius(18).clip(true).shadow({ radius: 20, color: '#18314733' })
     }
-    if (this.privacyOpen) { PrivacyPage({ consentRequired: !this.privacyAccepted, onClose: () => this.privacyOpen = false, onAccept: () => { this.privacyAccepted = true; this.privacyOpen = false; this.restoreAccount(); }, onWithdraw: () => { new PrivacyService(this.getUIContext().getHostContext() as common.UIAbilityContext).withdraw(); this.logout(); this.privacyAccepted = false; this.privacyOpen = true; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
+    if (this.privacyOpen) { PrivacyPage({ consentRequired: !this.privacyAccepted, onClose: () => this.privacyOpen = false, onAccept: () => { this.privacyAccepted = true; this.privacyOpen = false; this.restoreAccount(); this.checkReleaseUpdate(); }, onWithdraw: () => { new PrivacyService(this.getUIContext().getHostContext() as common.UIAbilityContext).withdraw(); this.logout(); this.privacyAccepted = false; this.privacyOpen = true; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
     if (this.lessonDownloadOpen) { LessonDownload({ course: this.course, onClose: () => this.lessonDownloadOpen = false, onDownload: (options: DownloadOptions) => { if (this.course) this.library?.enqueue([this.course], options); this.lessonDownloadOpen = false; this.getUIContext().getPromptAction().showToast({ message: '已添加本节课下载任务', duration: 2000 }); } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }) }
     if (this.downloadsOpen) { DownloadSheet({ discoveries: this.downloadDiscovered, discovering: this.downloadScopeChecking, onRefreshScope: () => this.downloadScopeRefresh++, scoped: this.downloadScoped, backSequence: this.downloadBackSequence, fullPage: true, courses: this.downloadCourses, account: this.account, store: this.store, onClose: () => this.downloadsOpen = false, onDownload: (courses: Course[], options: DownloadOptions) => { this.library?.enqueue(courses, options); this.offlineOpen = this.screen === 'home'; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
     if (this.account && this.privacyAccepted && !this.videoFullscreen) {

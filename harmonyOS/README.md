@@ -9,16 +9,16 @@ AI 功能需要用户自行配置个人 DeepSeek API。
 
 
 
-预览版（0.7.8，版本代码 35）。原生 ArkTS/ArkUI 应用，手机和平板使用同一工程，支持平板多窗及电脑模式。安装包最低要求 HarmonyOS 6.1.1 / API 24，目标 SDK 为 API 26；此前在 HarmonyOS 7 手机和平板上进行过测试。
+预览版（0.7.9，版本代码 36）。原生 ArkTS/ArkUI 应用，手机和平板使用同一工程，支持平板多窗及电脑模式。安装包最低要求 HarmonyOS 6.1.1 / API 24，目标 SDK 为 API 26；此前在 HarmonyOS 7 手机和平板上进行过测试。
 
 应用市场上架需要备案、授权材料、发行签名和审核，目前尚未完成，因此先在 GitHub 提供开发者自行签名安装的版本。**开启开发者模式之后，仍须为自己的设备配置合法的调试签名。** 未签名 HAP 无法直接安装，现有测试设备的签名也不能供其他设备通用。参见[华为应用签名要求](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-v5/experience-suggestions-security-debug-V5)。
 
 ## 下载与安装
 
-前往[跨平台预览版发布页](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.8-preview)。
+前往[跨平台预览版发布页](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/harmony-v0.7.9-preview)。
 
 - [仓库源码](../)：完整、无私人签名材料的工程，推荐通过 DevEco Studio 打开其中的 `harmonyOS` 目录，配置自己的自动签名并运行。
-- `ZhiyunAssistant-HarmonyOS-0.7.8-unsigned.hap`：已编译的未签名 HAP，供已有合法签名材料的开发者自行签名；不能直接安装。
+- `ZhiyunAssistant-HarmonyOS-0.7.9-unsigned.hap`：已编译的未签名 HAP，供已有合法签名材料的开发者自行签名；不能直接安装。
 - [安装说明](INSTALLATION.md)：开发者模式、签名和 HDC 安装步骤。
 - `SHA256SUMS.txt`：下载文件校验值。
 
@@ -52,3 +52,7 @@ npm test
 登录后可从应用内打开应用助手，使用自己配置的 DeepSeek API。助手支持浏览页面、查看已同步的课程与笔记、读取有权限的课件或转写、跳转和管理下载等操作；操作结果以界面和实际任务状态为准。安卓和鸿蒙不提供外部 Agent 接口。更多功能及具体设备上的表现仍需逐项验证。
 
 课程知识索引可在缓存设置中主动开启。开启后，部分整课或跨课问答及速览会在后台调用个人 AI 生成索引，可能产生费用；资料改变或缓存清理后会重新建立。索引只复用已经识别的课件内容，缺少必要细节时可回查原文；不会自动识别所有课件，也不会自动批处理所有课次。
+
+## 检查更新
+
+在「隐私与数据 → 版本更新」查看当前版本、手动检查或关闭每日自动检查。检查只获取本仓库在 GitHub 上的公开版本与安装包信息；发现新版后由用户打开发布页并自行安装。旧版本需要先手动安装带检测功能的新版。

@@ -1,3 +1,4 @@
+import {setupUpdates} from './update-ui.js';
 import { syncWindowChrome, appearanceMode, applyAppearanceMode } from "./themes.js";
 import { AppActions } from "./agent-runtime.js";
 import { searchCourseMaterial } from "./agent-search.js";
@@ -529,7 +530,7 @@ function privacy() {
       ]),
       el("div", { class: "privacy-grid" }, [
         card("lock", "校园登录", "校园账号密码由浙江大学官方认证页面处理；未选择记住时不保存密码，主动选择“记住校园登录”后仅保存在本机系统钥匙串。登录会话通过本机 WebKit 与仅本机用户可读取的加密快照保存和恢复；会话失效时使用学校官方认证。"),
-        card("key", "密钥", "个人 DeepSeek 与校园服务密钥保存在本机仅你本人可读的文件中，应用更新后保留；不写入普通配置，也不会出现在页面中。"),
+        card("key", "密钥", "个人 API 密钥由本机系统钥匙串保护；应用更新后可能需要系统授权，密钥不写入普通配置，也不会出现在页面中。"),
         card("agent", "AI 与应用助手", "只有启用 AI 时，所选课程上下文和你的问题才会发送到所选 AI 服务（个人 DeepSeek API 或本机模型；本地模式的推理不上传至这些云端 AI 服务）。应用助手会按你的指令读取必要的页面状态并操作本应用，过程可随时停止。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。"),
         card("home", "独立工具", "本工具独立开发，不代表学校或智云课堂运营方；只访问账号允许的课程。断网不会自动退出登录。"),
       ]),
@@ -545,6 +546,7 @@ function privacy() {
       ]),
     ]),
   );
+  $('#modalBody').append(applicationUpdates.card());
 }
 async function logout() {
   if (
@@ -7079,4 +7081,6 @@ async function pollExternalAgent(){
     }catch(error){await native.call("externalAgentReply",{id:request.id,error:String(error?.message || error)});}
   }catch(_){}finally{externalAgentWorking=false;}
 }
+const applicationUpdates=setupUpdates({native,el,button,toast});
+applicationUpdates.start();
 boot();

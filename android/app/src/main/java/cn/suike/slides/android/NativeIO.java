@@ -263,6 +263,12 @@ public final class NativeIO implements Closeable {
 
     private Object value(String method, JSONObject p) throws Exception {
         switch (method) {
+            case "app.info": return object("version",BuildConfig.VERSION_NAME,"platform","android","arch","universal","packaged",true);
+            case "app.updateFeed": {
+                java.net.HttpURLConnection connection=(java.net.HttpURLConnection)new java.net.URL("https://api.github.com/repos/He-He-He-He-He-He/ZhiyunAssistant/releases?per_page=100").openConnection();
+                connection.setConnectTimeout(12000);connection.setReadTimeout(12000);connection.setInstanceFollowRedirects(false);connection.setRequestProperty("Accept","application/vnd.github+json");connection.setRequestProperty("User-Agent","ZhiyunAssistant");connection.setRequestProperty("Cookie","");
+                try { if(connection.getResponseCode()!=200)throw new IOException("更新服务暂不可用");try(java.io.InputStream input=connection.getInputStream();java.io.ByteArrayOutputStream bytes=new java.io.ByteArrayOutputStream()){byte[] buffer=new byte[8192];int count;while((count=input.read(buffer))!=-1){if(bytes.size()+count>2097152)throw new IOException("更新数据过大");bytes.write(buffer,0,count);}return bytes.toString("UTF-8");} } finally { connection.disconnect(); }
+            }
             case "app.paths": return object("root", files.getPath(), "filesDir", files.getPath(),
                     "cacheDir", cache.getPath(), "tempDir", temporary.getPath());
             case "fs.exists": return path(p.getString("path")).exists();

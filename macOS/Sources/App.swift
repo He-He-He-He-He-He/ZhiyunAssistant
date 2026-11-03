@@ -1211,6 +1211,13 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
                 }
             }catch{self.reply(id,nil,userError(error))}}
         case "dragImage": do{try dragImage(p);reply(id,true)}catch{reply(id,nil,userError(error))}
+        case "applicationInfo": reply(id,["version":Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0","platform":"darwin","arch":"universal"])
+        case "updateFeed":
+            let config=URLSessionConfiguration.ephemeral;config.httpCookieStorage=nil;config.httpShouldSetCookies=false;config.urlCredentialStorage=nil;config.timeoutIntervalForRequest=12;config.timeoutIntervalForResource=15
+            var request=URLRequest(url:URL(string:"https://api.github.com/repos/He-He-He-He-He-He/ZhiyunAssistant/releases?per_page=100")!);request.setValue("application/vnd.github+json",forHTTPHeaderField:"Accept");request.setValue("ZhiyunAssistant",forHTTPHeaderField:"User-Agent")
+            let session=URLSession(configuration:config);session.dataTask(with:request){data,response,error in defer{session.finishTasksAndInvalidate()};guard error==nil,(response as? HTTPURLResponse)?.statusCode==200,let data=data,data.count<=2097152,let text=String(data:data,encoding:.utf8) else{self.reply(id,nil,"更新服务暂不可用");return};self.reply(id,text)}.resume()
+        case "openRelease":
+            guard let value=p["url"] as? String,value.hasPrefix("https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/"),let url=URL(string:value),url.user==nil,url.password==nil,url.port==nil else{reply(id,nil,"无效发布地址");return};NSWorkspace.shared.open(url);reply(id,true)
         case "toolbar": updateToolbar(name:p["name"] as? String ?? "",loggedIn:p["loggedIn"] as? Bool == true);reply(id,true)
         case "windowChrome": applyWindowChrome(p["color"] as? String ?? "",mode:p["mode"] as? String ?? "system") ? reply(id,true):reply(id,nil,"颜色无效")
         case "resumeSession": resumeOfficialSession{ready in self.reply(id,["ready":ready])}

@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 let app: ElectronApplication, page: Page, folder: string;
-const course = { subId: 'panes-fixture', courseId: 'panes-course', title: '功能区测试课程', teacher: '测试教师', room: '测试教室', start: 1791508800, end: 1791516000, status: '6' };
+const course = { subId: 'panes-fixture', courseId: 'panes-course', title: '功能区测试课程', teacher: '测试教师', room: '测试教室', start: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600), end: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600)+7200, status: '6' };
 test.beforeEach(async () => { folder = fs.mkdtempSync(path.join(os.tmpdir(), '智云助手功能区 ')); app = await electron.launch({ args: [path.resolve('.')], env: { ...process.env, ZHIYUN_TEST_DATA: folder }, timeout: 30000 }); page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded'); await expect(page.locator('body')).toContainText('隐私与数据'); });
 test.afterEach(async ({}, testInfo) => {
   if (testInfo.status !== testInfo.expectedStatus && page && !page.isClosed()) {
@@ -40,7 +40,7 @@ async function start(kind: string, configured = true) {
     ipcMain.handle('zhiyun:call', async (event, method, payload: any = {}) => {
       switch (method) {
         case 'session.restore': return { id: 'panes-account', name: '测试同学', tenantId: 112 };
-        case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'pane-preferences' ? { regular, missing: {} } : store.get(payload.key) || null;
+        case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'my-classroom-tab' ? 'recent' : payload.key === 'pane-preferences' ? { regular, missing: {} } : store.get(payload.key) || null;
         case 'storage.set': store.set(payload.key, payload.value); return null;
         case 'courses.schedule': case 'courses.chapters': return [currentCourse];
         case 'courses.permissions': return { 'panes-fixture': 'allowed' };

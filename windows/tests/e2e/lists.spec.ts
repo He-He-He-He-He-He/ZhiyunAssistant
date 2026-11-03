@@ -23,7 +23,7 @@ test.beforeEach(async()=>{
    (globalThis as any).__listCalls.push({method,payload});
    switch(method){
     case 'session.restore':return{id:'synthetic-list',name:'测试账户',tenantId:112};
-    case 'storage.get':return payload.key==='privacy-consent'?true:store.get(payload.key)||null;
+    case 'storage.get':return payload.key==='privacy-consent'?true:payload.key==='my-classroom-tab'?'recent':store.get(payload.key)||null;
     case 'storage.set':store.set(payload.key,payload.value);return null;
     case 'courses.schedule':return rows;
     case 'courses.history':return{courses:rows,complete:true};

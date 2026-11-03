@@ -9,7 +9,7 @@ Android 手机、平板和折叠屏客户端。沿用智云助手现有学习页
 
 ## 安装
 
-在[安卓预览版](https://github.com/He-He-He-He-He-He-He/ZhiyunAssistant/releases/tag/mobile-ui-2026.11-preview)下载 `ZhiyunAssistant-0.1.0-beta.5-Android.apk`，核对同一发布的 SHA256 后打开安装。适用于 Android 8.0 / API26 及以上，需 Android System WebView 100 或更新版本；不要求安装开发工具。安装确认由系统处理，不需要关闭系统安全防护。
+在[安卓预览版](https://github.com/He-He-He-He-He-He-He/ZhiyunAssistant/releases/tag/updates-2026.11-preview)下载 `ZhiyunAssistant-0.1.0-beta.6-Android.apk`，核对同一发布的 SHA256 后打开安装。适用于 Android 8.0 / API26 及以上，需 Android System WebView 100 或更新版本；不要求安装开发工具。安装确认由系统处理，不需要关闭系统安全防护。
 
 一个 APK 可用于手机、Android 平板和折叠屏；代码不依赖 CPU 原生库。当前为预览版，实际验证范围见 [VERIFICATION.md](VERIFICATION.md)，功能对照见 [FEATURE_PARITY.md](FEATURE_PARITY.md)。
 
@@ -64,3 +64,7 @@ npm run build:web
 登录后可从应用内打开应用助手，使用自己配置的 DeepSeek API。助手支持浏览页面、查看已同步的课程与笔记、读取有权限的课件或转写、跳转和管理下载等操作；操作结果以界面和实际任务状态为准。安卓和鸿蒙不提供外部 Agent 接口。更多功能及具体设备上的表现仍需逐项验证。
 
 课程知识索引可在缓存设置中主动开启。开启后，部分整课或跨课问答及速览会在后台调用个人 AI 生成索引，可能产生费用；资料改变或缓存清理后会重新建立。索引只复用已经识别的课件内容，缺少必要细节时可回查原文；不会自动识别所有课件，也不会自动批处理所有课次。
+
+## 检查更新
+
+在「隐私与数据 → 版本更新」查看当前版本、手动检查或关闭每日自动检查。检查只获取本仓库在 GitHub 上的公开版本与安装包信息；发现新版后由用户打开发布页并自行安装。旧版本需要先手动安装带检测功能的新版。

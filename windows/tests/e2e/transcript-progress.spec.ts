@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 let app: ElectronApplication, page: Page, folder: string;
-const course = { subId: 'bookmark-lesson', courseId: 'bookmark-course', title: '阅读位置合成课程', teacher: '测试教师', room: '测试教室', start: 1791508800, end: 1791511800, status: '6' };
+const course = { subId: 'bookmark-lesson', courseId: 'bookmark-course', title: '阅读位置合成课程', teacher: '测试教师', room: '测试教室', start: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600), end: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600)+3000, status: '6' };
 const media = pathToFileURL(path.resolve('tests/fixtures/media/test-pattern.mp4')).href;
 const book = { id: 'line-3-42', t: 1026, offset: -9, browsing: true };
 test.beforeEach(async () => { folder = fs.mkdtempSync(path.join(os.tmpdir(), '智云助手 阅读进度 ')); await launch(); });
@@ -44,7 +44,7 @@ async function fixture(options: { withSlides?: boolean; video?: boolean; live?: 
    switch (method) {
     case 'session.restore': return loggedOut ? null : { id: 'bookmark-account', name: '测试同学', tenantId: 112 };
     case 'session.logout': (globalThis as any).__bookmarkEvents.push({ method }); loggedOut = true; return null;
-    case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'pane-preferences' ? { regular, missing: {} } : store.get(payload.key) || null;
+    case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'my-classroom-tab' ? (setup.options.live?'today':'recent') : payload.key === 'pane-preferences' ? { regular, missing: {} } : store.get(payload.key) || null;
     case 'storage.set': store.set(payload.key, payload.value); return null;
     case 'courses.schedule': case 'courses.chapters': return courses;
     case 'courses.permissions': return Object.fromEntries(courses.map(course => [course.subId, 'allowed']));

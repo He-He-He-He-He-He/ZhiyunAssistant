@@ -12,7 +12,7 @@ const fixtureRoot = fs.realpathSync(path.resolve('tests/fixtures/media'));
 const fixtureFiles: Record<string, { url: string; type: string }> = {};
 function registerFiles(directory: string) { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) { const resolved = fs.realpathSync(path.join(directory, entry.name)); if (!resolved.startsWith(fixtureRoot + path.sep)) throw new Error('合成样本超出受控目录'); if (entry.isDirectory()) registerFiles(resolved); else if (entry.isFile() && /\.(mp4|m3u8|ts)$/.test(entry.name)) fixtureFiles[path.relative(fixtureRoot, resolved).split(path.sep).join('/')] = { url: pathToFileURL(resolved).href, type: entry.name.endsWith('.mp4') ? 'video/mp4' : entry.name.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t' }; } }
 registerFiles(fixtureRoot);
-const course = { subId: 'synthetic-media', courseId: 'synthetic-media-course', title: '合成媒体测试课程', teacher: '测试数据', room: '测试环境', term: '自生成测试资料', start: 1791508800, end: 1791508824, status: '6' };
+const course = { subId: 'synthetic-media', courseId: 'synthetic-media-course', title: '合成媒体测试课程', teacher: '测试数据', room: '测试环境', term: '自生成测试资料', start: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600), end: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600)+24, status: '6' };
 
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
@@ -73,7 +73,7 @@ async function start(format: 'mp4' | 'hls', resume?: number, waitReady=true,sche
     ipcMain.handle('zhiyun:call', async (_event, method, payload: any = {}) => {
       switch (method) {
         case 'session.restore': return { id: 'synthetic-account', name: '测试账户', tenantId: 112 };
-        case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'pane-preferences' ? { regular: { slides: true, transcript: true, video: true, notes: false, ai: false, summary: false }, missing: {} } : store.get(payload.key) || null;
+        case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'my-classroom-tab' ? 'recent' : payload.key === 'pane-preferences' ? { regular: { slides: true, transcript: true, video: true, notes: false, ai: false, summary: false }, missing: {} } : store.get(payload.key) || null;
         case 'storage.set': store.set(payload.key, payload.value); return null;
         case 'courses.schedule': case 'courses.chapters': return [currentCourse];
         case 'courses.permissions': return { [currentCourse.subId]: 'allowed' };

@@ -1,3 +1,4 @@
+import {UpdatePanel} from './UpdatePanel';
 import { common } from '@kit.AbilityKit';
 import { PrivacyService } from '../services/PrivacyService';
 @Component
@@ -16,6 +17,7 @@ export struct PrivacyPage {
       Row({ space: 8 }) { if (!this.consentRequired) { Button('返回').height(32).fontSize(12).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.onClose()) } Text('隐私与数据').fontSize(22).fontWeight(FontWeight.Bold).fontColor('#0F2340').layoutWeight(1) }.width('100%')
       Scroll() {
         Column({ space: 18 }) {
+          if (!this.consentRequired) { UpdatePanel() }
           Text('智云助手是独立的学习辅助工具。课程内容由智云课堂提供，能否访问由你的校园账号权限决定。').fontSize(15).lineHeight(26).fontColor('#0F2340').width('100%')
           Text('登录与课程\n校园账号和密码仅用于向浙江大学官方认证页面提交登录，不发送给开发者，不保存密码。登录会话和账户身份使用系统安全资产库加密保存。断网不会自动退出，可查看当前账号已下载的课程；主动退出后清除身份与会话并隐藏下载入口。课程名、上课时间、课件、转写和视频由官方服务提供，学习内容缓存在本机应用沙箱。每节课的学习进度、课程收藏和稍后再看记录也只保存在本机，不上传给开发者。').fontSize(14).lineHeight(25).fontColor('#425F7D').width('100%')
           Text('笔记、图片与设备互联\n笔记保存在本机。选择图片、拍摄、设备互联和导出文件只在你主动操作时调用系统界面，不扫描相册或其他文件。设备互联的图片由系统受控通道传入，插入的图片会复制到笔记中。').fontSize(14).lineHeight(25).fontColor('#425F7D').width('100%')

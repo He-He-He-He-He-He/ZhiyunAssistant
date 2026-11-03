@@ -5,13 +5,13 @@ AI 功能需要用户自行配置个人 DeepSeek API。
 
 
 
-当前版本 **0.8.0-beta.2**。采用 Electron、React 与受限桌面服务，迁移现有智云课程 API、时间线、重复课件、笔记及 AI 上下文模型。目标是保留鸿蒙版本的学习行为；具体迁移目标见 [FEATURE_PARITY.md](FEATURE_PARITY.md)，实际测试范围见 [VERIFICATION.md](VERIFICATION.md)。
+当前版本 **0.8.0-beta.3**。采用 Electron、React 与受限桌面服务，迁移现有智云课程 API、时间线、重复课件、笔记及 AI 上下文模型。目标是保留鸿蒙版本的学习行为；具体迁移目标见 [FEATURE_PARITY.md](FEATURE_PARITY.md)，实际测试范围见 [VERIFICATION.md](VERIFICATION.md)。
 
 ## 安装
 
 目标系统为 Windows 10/11 的 64 位版本，不提供 Windows 7/8/8.1 或 32 位安装包。Electron 的 Windows 平台范围与架构说明见其[官方 README](https://github.com/electron/electron#platform-support)和[安装文档](https://www.electronjs.org/docs/latest/tutorial/installation)。
 
-1. 在[跨平台预览版](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/cross-platform-2026.11-preview)下载与电脑架构一致的 ZIP。
+1. 在[跨平台预览版](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/updates-2026.11-preview)下载与电脑架构一致的 ZIP。
 2. x64 用于 Intel/AMD 64 位电脑，ARM64 用于 Windows on ARM。当前预览版提供 ZIP，不要求先装 Node.js、DevEco Studio 或开发工具。
 3. ZIP 需完整解压后打开其中的智云助手程序，保留同目录的运行时和资源文件。ZIP 仍使用系统用户的数据目录，不是把资料保存在压缩包旁的便携数据模式。
 4. 首次阅读隐私说明，然后通过浙江大学官方登录窗口登录智云课堂。验证码、二次认证等由用户在官方页面完成。
@@ -21,7 +21,7 @@ AI 功能需要用户自行配置个人 DeepSeek API。
 PowerShell 校验示例（文件名以当前 Release 为准）：
 
 ~~~powershell
-Get-FileHash '.\ZhiyunAssistant-Windows-0.8.0-beta.2-x64.zip' -Algorithm SHA256
+Get-FileHash '.\ZhiyunAssistant-Windows-0.8.0-beta.3-x64.zip' -Algorithm SHA256
 ~~~
 
 ## 日常学习
@@ -99,3 +99,7 @@ Windows 用户机器的真实校园登录、全部教室直播、付费 DeepSeek
 在“隐私与数据”中可启用默认关闭的本机 MCP 接口，并使用“AI 帮你安装”复制配置，交给支持 MCP 的客户端。应用须保持运行并处于登录状态；具体读取和操作由用户逐次确认。仅为可信的本机程序开启，用完可随时关闭。接口只覆盖操作目录列出的功能，不能代替系统授权或突破课程权限。
 
 课程知识索引可在缓存设置中主动开启。开启后，部分整课或跨课问答及速览会在后台调用个人 AI 生成索引，可能产生费用；资料改变或缓存清理后会重新建立。索引只复用已经识别的课件内容，缺少必要细节时可回查原文；不会自动识别所有课件，也不会自动批处理所有课次。
+
+## 检查更新
+
+在「隐私与数据 → 版本更新」查看当前版本、手动检查或关闭每日自动检查。检查只获取本仓库在 GitHub 上的公开版本与安装包信息；发现新版后由用户打开发布页并自行安装。旧版本需要先手动安装带检测功能的新版。

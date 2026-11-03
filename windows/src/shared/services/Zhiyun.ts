@@ -1,3 +1,4 @@
+import {normalizeScheduleEnvelope} from '../model/ScheduleEnvelope';
 import { LocalStore } from './LocalStore';
 import { captionSeconds } from '../model/CaptionTime';
 import { ClassroomMedia, MediaSource, mediaSources } from '../model/Media';
@@ -289,9 +290,8 @@ export class Zhiyun {
   private async schedules(account: Account, start: string, end: string): Promise<Course[]> {
     const path = `/courseapi/v2/schedule/get-week-schedules?user_id=${encodeURIComponent(account.id)}&tenant_id=${account.tenantId}&start_at=${start}&end_at=${end}`;
     const data = JSON.parse(await this.request(path)) as ScheduleResponse;
-    if (data.code !== 0 && !data.result) throw new Error('课表同步失败，请稍后重试');
+    const days=normalizeScheduleEnvelope(data).days;
     const result: Course[] = [];
-    const days = data.result?.list || data.result?.data?.list || [];
     days.forEach((day: ScheduleDay) => {
       (day.course || day.courses || day.list || []).forEach((c: ScheduleRaw) => {
         const startTime = this.epochSeconds(c.start_at), endTime = this.epochSeconds(c.end_at);

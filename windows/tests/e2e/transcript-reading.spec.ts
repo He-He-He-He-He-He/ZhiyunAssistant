@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 
 let app: ElectronApplication, page: Page, folder: string;
-const course = { subId: 'reading-lesson', courseId: 'reading-course', title: '转写阅读测试课程', teacher: '测试教师', room: '测试教室', start: 1791508800, end: 1791511800, status: '6' };
+const course = { subId: 'reading-lesson', courseId: 'reading-course', title: '转写阅读测试课程', teacher: '测试教师', room: '测试教室', start: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600), end: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600)+3000, status: '6' };
 
 test.beforeEach(async () => {
   folder = fs.mkdtempSync(path.join(os.tmpdir(), '智云助手 转写锚点 '));
@@ -31,7 +31,7 @@ async function start(summary = false) {
     ipcMain.handle('zhiyun:call', async (_event, method, payload: any = {}) => {
       switch (method) {
         case 'session.restore': return { id: 'reading-account', name: '测试同学', tenantId: 112 };
-        case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'pane-preferences' ? { regular, missing: {} } : payload.key === 'study-options' ? { common: ['slides', 'transcript', 'summary'] } : store.get(payload.key) || null;
+        case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'my-classroom-tab' ? 'recent' : payload.key === 'pane-preferences' ? { regular, missing: {} } : payload.key === 'study-options' ? { common: ['slides', 'transcript', 'summary'] } : store.get(payload.key) || null;
         case 'storage.set': store.set(payload.key, payload.value); return null;
         case 'courses.schedule': case 'courses.chapters': return [course];
         case 'courses.permissions': return { 'reading-lesson': 'allowed' };

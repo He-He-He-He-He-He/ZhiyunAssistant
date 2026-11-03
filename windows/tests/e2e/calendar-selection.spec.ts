@@ -21,7 +21,7 @@ test.beforeAll(async () => {
     ipcMain.handle('zhiyun:call', async (_event, method, payload: any = {}) => {
       switch (method) {
         case 'session.restore': return { id: 'calendar-test', name: '测试同学', tenantId: 112 };
-        case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'pane-preferences' ? { regular: { slides: false, transcript: true, video: false, notes: false, ai: false, summary: false }, missing: {} } : store.get(payload.key) || null;
+        case 'storage.get': return payload.key === 'privacy-consent' ? true : payload.key === 'my-classroom-tab' ? 'recent' : payload.key === 'pane-preferences' ? { regular: { slides: false, transcript: true, video: false, notes: false, ai: false, summary: false }, missing: {} } : store.get(payload.key) || null;
         case 'storage.set': store.set(payload.key, payload.value); return null;
         case 'courses.schedule': case 'courses.chapters': return rows;
         case 'courses.history': return { courses: rows, complete: true };
@@ -64,7 +64,7 @@ test('calendar keeps only current-month dates, marks known records, permits empt
 });
 test('transcript blank focus selects body without timestamps, copies one plain paragraph and outside tapping dismisses it', async () => {
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.getByRole('button', { name: '近两周课程', exact: true }).click();
+  await page.getByRole('button', { name: '今日课表', exact: true }).click();
   await page.getByRole('button', { name: '进入学习', exact: true }).first().click();
   await expect(page.getByRole('heading', { name: '课堂转写', exact: true })).toBeVisible();
   await page.locator('.transcript-pane .pane-title').click();

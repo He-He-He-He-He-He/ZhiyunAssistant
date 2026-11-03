@@ -24,3 +24,5 @@
 .marks{display:inline-flex;gap:4px;align-items:center}.marks button{width:36px;height:36px;min-width:36px;min-height:36px;padding:6px;flex:none}.collection-icon{display:block;width:22px;height:22px;flex:none;overflow:visible}
 .app-assistant-entry{border:1px solid #dbe7f5;background:#fff;color:#29435f;min-height:36px;padding:5px 11px}.app-assistant-entry span{display:inline}
 @media(max-width:699px){.assistant-entry-slot .app-assistant-entry{font-size:11px;padding:4px 6px;min-height:32px}.app-assistant-entry span{display:inline}}
+
+.update-settings{display:flex;flex-direction:column;gap:10px;padding:16px;border:1px solid var(--line);border-radius:14px;background:#f5f9ff}.update-settings p{margin:0;line-height:1.6}
