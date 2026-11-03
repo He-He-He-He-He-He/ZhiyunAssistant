@@ -155,18 +155,18 @@ export function AppAssistant(props: Props) {
     } });
     return actions;
   };
-  const externalActions = useRef<AppActions | undefined>(undefined);
-  if (!externalActions.current) externalActions.current = makeActions();
+  const externalActions = useRef<{ owner: string; actions: AppActions } | undefined>(undefined);
+  if (!externalActions.current || externalActions.current.owner !== props.accountId) externalActions.current = { owner: props.accountId, actions: makeActions() };
   useEffect(() => {
     let active = true; let timer: ReturnType<typeof setTimeout>; const owner = props.accountId;
     const poll = async () => {
       try { const status = await api<{enabled:boolean}>('external.status'); if (!active) return;
         if (status.enabled) { const request = await api<any>('external.next'); if (!active) return;
           if (request) { try { const guard = () => { if (!active || current.current.accountId !== owner) throw new Error('账号已改变'); }; let result: unknown;
-            if (request.method === 'actions') result = externalActions.current!.catalogue();
+            if (request.method === 'actions') result = externalActions.current!.actions.catalogue();
             else if (request.method === 'state') result = {page: current.current.page, course: current.current.courseName || ''};
-            else if (request.method === 'interface') result = await externalActions.current!.execute('inspect', {}, guard);
-            else if (request.method === 'do') result = await externalActions.current!.execute(String(request.params.action || ''), request.params.args || {}, guard);
+            else if (request.method === 'interface') result = await externalActions.current!.actions.execute('inspect', {}, guard);
+            else if (request.method === 'do') result = await externalActions.current!.actions.execute(String(request.params.action || ''), request.params.args || {}, guard);
             else throw new Error('未知请求'); guard(); await api('external.reply', {id:request.id,result});
           } catch (error) { await api('external.reply', {id:request.id,error:error instanceof Error ? error.message : '操作失败'}).catch(() => {}); } }
         }
