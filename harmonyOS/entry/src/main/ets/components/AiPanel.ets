@@ -223,36 +223,36 @@ export struct AiPanel {
         Scroll() {
           Row({ space: 6 }) {
             if (this.configured && !this.settings) {
-            Button('新对话').height(30).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.newChat())
-            Button('历史').height(30).fontSize(11).backgroundColor(this.historyOpen ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => { this.persistChat(); this.historyOpen = !this.historyOpen; })
-            Button() { DropdownLabel({ label: this.model + '', labelSize: 10 }) }.padding(0).fontSize(10).height(30).backgroundColor('#EAF4FF').fontColor('#168BEE').bindMenu(this.models.map((model: string): MenuElement => { return { value: model, action: () => { this.model = model; this.store?.saveJson('ai-model.txt', model); } }; }))
-            Button(this.selectedCount ? '课件 ' + this.selectedCount + ' 页' : '选课件').fontSize(11).height(30).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.onSelectPages())
-            Button(this.whole ? '✓ 整节课' : '整节课').fontSize(11).height(30).backgroundColor(this.whole ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => this.whole = !this.whole)
-            Button() { DropdownLabel({ label: this.mode === 'auto' ? '自动' : this.mode === 'always' ? '结合课件' : '只看转写', labelSize: 11 }) }.padding(0).fontSize(11).height(30).backgroundColor(this.mode === 'auto' ? '#EAF4FF' : '#DDEEFF').fontColor('#168BEE').bindMenu([
+            Button('新对话').height(30).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.newChat())
+            Button('历史').height(30).fontSize(11).backgroundColor(this.historyOpen ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => { this.persistChat(); this.historyOpen = !this.historyOpen; })
+            Button() { DropdownLabel({ label: this.model + '', labelSize: 10 }) }.padding(0).fontSize(10).height(30).backgroundColor('#E2F0FF').fontColor('#1F7BFF').bindMenu(this.models.map((model: string): MenuElement => { return { value: model, action: () => { this.model = model; this.store?.saveJson('ai-model.txt', model); } }; }))
+            Button(this.selectedCount ? '课件 ' + this.selectedCount + ' 页' : '选课件').fontSize(11).height(30).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.onSelectPages())
+            Button(this.whole ? '✓ 整节课' : '整节课').fontSize(11).height(30).backgroundColor(this.whole ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => this.whole = !this.whole)
+            Button() { DropdownLabel({ label: this.mode === 'auto' ? '自动' : this.mode === 'always' ? '结合课件' : '只看转写', labelSize: 11 }) }.padding(0).fontSize(11).height(30).backgroundColor(this.mode === 'auto' ? '#E2F0FF' : '#DDEEFF').fontColor('#1F7BFF').bindMenu([
               { value: '自动判断', action: () => this.mode = 'auto' },
               { value: '强制结合课件作答', action: () => this.mode = 'always' },
               { value: '强制不结合课件', action: () => this.mode = 'never' }
             ])
             }
-            if (this.configured && !this.settings) { Button('API设置').height(30).fontSize(12).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => { this.replacing = false; this.settings = true; }) }
+            if (this.configured && !this.settings) { Button('API设置').height(30).fontSize(12).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => { this.replacing = false; this.settings = true; }) }
           }.height(32)
         }.layoutWeight(1).height(32).align(Alignment.End).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
       }.width('100%')
       if (this.configured && this.settings && !this.replacing) {
         Column({ space: 18 }) {
-          Text('API 已连接').fontSize(20).fontColor('#20344D')
-          Text('密钥已加密保存在本机').fontSize(13).fontColor('#71839A')
-          Text(AiClient.usage(this.store).prompt > 0 ? '已记录输入 ' + AiClient.usage(this.store).prompt + ' token · 缓存命中 ' + Math.round(AiClient.usage(this.store).hit / AiClient.usage(this.store).prompt * 100) + '%' : '使用记录将在请求完成后更新').fontSize(12).fontColor('#71839A')
+          Text('API 已连接').fontSize(20).fontColor('#0F2340')
+          Text('密钥已加密保存在本机').fontSize(13).fontColor('#566A85')
+          Text(AiClient.usage(this.store).prompt > 0 ? '已记录输入 ' + AiClient.usage(this.store).prompt + ' token · 缓存命中 ' + Math.round(AiClient.usage(this.store).hit / AiClient.usage(this.store).prompt * 100) + '%' : '使用记录将在请求完成后更新').fontSize(12).fontColor('#566A85')
           Button('删除 API 密钥').height(38).fontColor('#B44747').backgroundColor('#FCEEEE').onClick(() => { this.cancel(); AiClient.clearKey().then(() => { this.configured = false; this.settings = false; }).catch(() => this.error = '删除失败，请重试'); })
-          Button('更换 API 密钥').height(38).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.replacing = true)
-          Button('返回对话').height(38).backgroundColor('#168BEE').fontColor('#FFFFFF').onClick(() => { this.replacing = false; this.settings = false; })
+          Button('更换 API 密钥').height(38).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.replacing = true)
+          Button('返回对话').height(38).backgroundColor('#1F7BFF').fontColor('#FFFFFF').onClick(() => { this.replacing = false; this.settings = false; })
         }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else if (!this.configured || this.settings) {
-        if (this.configured) { Button('返回对话').height(32).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => { this.replacing = false; this.settings = false; }) }
+        if (this.configured) { Button('返回对话').height(32).fontSize(12).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => { this.replacing = false; this.settings = false; }) }
         ApiKeySetup({ onEditingFocus: this.onEditingFocus, onEnabled: () => { this.configured = true; this.settings = false; this.replacing = false; this.initialize(); } }).layoutWeight(1).width('100%')
       } else if (this.historyOpen) {
-        Text('本节课的对话').fontSize(13).fontColor('#71839A').width('100%')
-        List({ space: 10 }) { ForEach(this.sessions, (session: ChatSession) => { ListItem() { Row({ space: 8 }) { Column({ space: 6 }) { Text(session.title).fontSize(14).fontColor('#20344D'); Text(session.turns.length + ' 次提问').fontSize(11).fontColor('#71839A') }.layoutWeight(1).alignItems(HorizontalAlign.Start).onClick(() => this.selectChat(session)); Button('打开').height(30).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.selectChat(session)); Button('删除').height(30).fontSize(11).backgroundColor('#FCEEEE').fontColor('#B44747').onClick(() => { if (this.store) { this.chats?.delete(session.id); this.sessions = this.chats?.list() || []; if (this.sessionId === session.id) { this.sessionId = ''; this.turns = []; } } }) }.padding(12).width('100%').backgroundColor('#FFFFFF').borderRadius(12) } }, (session: ChatSession) => session.id) }.width('100%').layoutWeight(1)
+        Text('本节课的对话').fontSize(13).fontColor('#566A85').width('100%')
+        List({ space: 10 }) { ForEach(this.sessions, (session: ChatSession) => { ListItem() { Row({ space: 8 }) { Column({ space: 6 }) { Text(session.title).fontSize(14).fontColor('#0F2340'); Text(session.turns.length + ' 次提问').fontSize(11).fontColor('#566A85') }.layoutWeight(1).alignItems(HorizontalAlign.Start).onClick(() => this.selectChat(session)); Button('打开').height(30).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.selectChat(session)); Button('删除').height(30).fontSize(11).backgroundColor('#FCEEEE').fontColor('#B44747').onClick(() => { if (this.store) { this.chats?.delete(session.id); this.sessions = this.chats?.list() || []; if (this.sessionId === session.id) { this.sessionId = ''; this.turns = []; } } }) }.padding(12).width('100%').backgroundColor('#FFFFFF').borderRadius(12) } }, (session: ChatSession) => session.id) }.width('100%').layoutWeight(1)
       } else {
         Stack({ alignContent: Alignment.Bottom }) {
           Column() {
@@ -267,13 +267,13 @@ export struct AiPanel {
             }, (index: number) => String(index))
           }.width('100%').padding({ bottom: this.returnVisible ? STUDY_RETURN_SCROLL_SPACE : 0 })
         }.layoutWeight(1).width('100%').scrollable(ScrollDirection.Vertical).enableScrollInteraction(!this.draggingAnswer).onGestureJudgeBegin((info: GestureInfo, event: BaseGestureEvent) => this.draggingAnswer && info.type === GestureControl.GestureType.PAN_GESTURE ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE)
-        if (this.progress) { Row() { Text(this.progress).fontSize(12).fontColor('#168BEE').layoutWeight(1); Button('取消').height(28).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.cancel()) }.width('100%') }
+        if (this.progress) { Row() { Text(this.progress).fontSize(12).fontColor('#1F7BFF').layoutWeight(1); Button('取消').height(28).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.cancel()) }.width('100%') }
           }.width('100%').height('100%')
           if (this.returnVisible) { ReturnAction({ owner: 'ai', onReturn: this.onReturn }).margin({ bottom: 6 }).zIndex(2) }
         }.layoutWeight(1).width('100%')
         TextArea({ controller: this.questionController, text: this.question, placeholder: '问问这节课…' }).id('ai-question').placeholderFont({ size: 14 }).placeholderColor('#889AAF').height(this.questionHeight()).padding({ top: 7, bottom: 7, left: 10, right: 10 }).fontSize(14).onAreaChange((oldArea: Area, area: Area) => this.questionWidth = Number(area.width)).enterKeyType(EnterKeyType.Send).onSubmit(() => this.questionSubmit()).onFocus(() => this.questionFocused()).onBlur(() => { this.controlDown = false; this.shiftDown = false; this.onEditingFocus(false); }).onChange((value: string) => this.question = value)
           .onTextSelectionChange((start: number, end: number) => { this.selectionStart = start; this.selectionEnd = end; }).focusable(true).focusOnTouch(true).onKeyPreIme((event: KeyEvent): boolean => this.questionKey(event)).onTouch((event: TouchEvent) => this.questionTouched(event)).onMouse((event: MouseEvent) => event.stopPropagation())
-        Button('发送').height(38).width('100%').backgroundColor('#168BEE').fontColor('#FFFFFF').enabled(!this.busy && !!this.question.trim()).onClick(() => this.ask())
+        Button('发送').height(38).width('100%').backgroundColor('#1F7BFF').fontColor('#FFFFFF').enabled(!this.busy && !!this.question.trim()).onClick(() => this.ask())
       }
       if (this.error) { Text(this.error).fontSize(12).fontColor('#AF693C').width('100%') }
     }.padding(12).width('100%').height('100%').backgroundColor(STUDY_SURFACE).borderRadius(STUDY_RADIUS)

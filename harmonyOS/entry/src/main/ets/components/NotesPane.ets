@@ -250,7 +250,7 @@ export struct NotesPane {
           Scroll() { Row({ space: 8 }) { ForEach(noteColors, (color: string) => { Button(this.color(source) === color ? '✓' : '').width(28).height(28).padding(0).fontSize(12).fontColor('#425F7D').backgroundColor(color).border({ width: this.color(source) === color ? 1 : 0, color: '#9CAABD' }).onClick(() => this.chooseColor(source, color)) }, (color: string) => color) } }.width('100%').height(28).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
         }.width('100%')
       }, (source: string) => source)
-      Button('完成').width('100%').height(32).backgroundColor('#F1F3F5').fontColor('#168BEE').onClick(() => this.colorsOpen = false)
+      Button('完成').width('100%').height(32).backgroundColor('#EEF6FF').fontColor('#1F7BFF').onClick(() => this.colorsOpen = false)
     }.padding(10).width('100%').backgroundColor('#FFFFFF').borderRadius(10)
   }
   private jumpBlock(block: NoteBlock): void { const reference = block.atoms[0]?.reference; if (reference) this.onContentJump(reference); else this.onJump(block.at, block.sourceId, block.source === 'transcript' ? blockText(block) : ''); }
@@ -334,26 +334,26 @@ export struct NotesPane {
   @Builder
   private noteManager() {
     Column({ space: 10 }) {
-      Row() { Text('本节课的笔记').fontSize(16).fontWeight(FontWeight.Medium).fontColor('#20344D'); Blank(); Text(`${this.noteList.length} 条`).fontSize(12).fontColor('#71839A') }.width('100%')
+      Row() { Text('本节课的笔记').fontSize(16).fontWeight(FontWeight.Medium).fontColor('#0F2340'); Blank(); Text(`${this.noteList.length} 条`).fontSize(12).fontColor('#566A85') }.width('100%')
       if (this.noteList.length) {
         List({ space: 8 }) {
           ForEach(this.noteList, (note: LessonNote) => {
             ListItem() {
               Row({ space: 8 }) {
-                Column({ space: 4 }) { Text(note.course.title + '_' + shanghaiDate(note.course.start) + '_' + (note.title || '课堂笔记')).fontSize(14).fontColor('#20344D').maxLines(1); Text(`${note.atoms.length} 项内容`).fontSize(11).fontColor('#71839A') }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-                if ((note.id || 'default') === this.activeNoteId) { Text('当前').fontSize(11).fontColor('#168BEE') }
-                Button('重命名').height(30).fontSize(11).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => { this.persist(); this.renameId = note.id || 'default'; this.renameText = note.title || '课堂笔记'; })
+                Column({ space: 4 }) { Text(note.course.title + '_' + shanghaiDate(note.course.start) + '_' + (note.title || '课堂笔记')).fontSize(14).fontColor('#0F2340').maxLines(1); Text(`${note.atoms.length} 项内容`).fontSize(11).fontColor('#566A85') }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                if ((note.id || 'default') === this.activeNoteId) { Text('当前').fontSize(11).fontColor('#1F7BFF') }
+                Button('重命名').height(30).fontSize(11).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => { this.persist(); this.renameId = note.id || 'default'; this.renameText = note.title || '课堂笔记'; })
                 Button('删除').height(30).fontSize(11).fontColor('#B44747').backgroundColor('#FCEEEE').onClick(() => this.deleteNote(note.id || 'default'))
               }.padding(10).width('100%').backgroundColor('#F4F7FB').borderRadius(10)
             }
           }, (note: LessonNote) => (note.id || 'default') + ':' + note.title + ':' + note.savedAt)
         }.layoutWeight(1).width('100%')
-      } else { Text('还没有课堂笔记').layoutWeight(1).fontSize(13).fontColor('#71839A').width('100%').textAlign(TextAlign.Center) }
+      } else { Text('还没有课堂笔记').layoutWeight(1).fontSize(13).fontColor('#566A85').width('100%').textAlign(TextAlign.Center) }
       if (this.renameId) {
         TextInput({ controller: this.renameInput.controller, text: this.renameText, placeholder: '笔记名称' }).onTouch((event: TouchEvent) => event.stopPropagation()).onMouse((event: MouseEvent) => event.stopPropagation()).onKeyPreIme((event: KeyEvent): boolean => this.renameInput.digit(event, this.renameText, (value: string) => this.renameText = value)).height(40).onChange((value: string) => this.renameText = value).onFocus(() => this.onEditingFocus(true)).onBlur(() => { this.renameInput.reset(); this.onEditingFocus(false); })
-        Row({ space: 8 }) { Button('取消').height(32).onClick(() => this.renameId = ''); Button('保存名称').height(32).fontColor('#FFFFFF').backgroundColor('#168BEE').onClick(() => { const note = this.noteList.find((entry: LessonNote) => (entry.id || 'default') === this.renameId); if (note && this.repository) { this.repository.rename(note, this.renameText); if (this.activeNoteId === this.renameId) this.activeNoteTitle = note.title || '课堂笔记'; this.noteList = this.repository.listFor(note.course); } this.renameId = ''; }) }.width('100%')
+        Row({ space: 8 }) { Button('取消').height(32).onClick(() => this.renameId = ''); Button('保存名称').height(32).fontColor('#FFFFFF').backgroundColor('#1F7BFF').onClick(() => { const note = this.noteList.find((entry: LessonNote) => (entry.id || 'default') === this.renameId); if (note && this.repository) { this.repository.rename(note, this.renameText); if (this.activeNoteId === this.renameId) this.activeNoteTitle = note.title || '课堂笔记'; this.noteList = this.repository.listFor(note.course); } this.renameId = ''; }) }.width('100%')
       }
-      Button('返回编辑').height(36).width('100%').backgroundColor('#168BEE').fontColor('#FFFFFF').onClick(() => this.managerOpen = false)
+      Button('返回编辑').height(36).width('100%').backgroundColor('#1F7BFF').fontColor('#FFFFFF').onClick(() => this.managerOpen = false)
     }.layoutWeight(1).width('100%').padding(12).backgroundColor('#FFFFFF').borderRadius(10)
   }
   build() {
@@ -361,12 +361,12 @@ export struct NotesPane {
       Row({ space: 8 }) {
         Text('课堂笔记').fontSize(STUDY_TITLE_SIZE).fontWeight(FontWeight.Medium).fontColor(STUDY_TITLE_COLOR).maxLines(1)
         Scroll() { Row({ space: 6 }) {
-          Button() { DropdownLabel({ label: this.activeNoteTitle + '', labelSize: 11 }) }.padding(0).fontSize(11).height(30).backgroundColor('#EAF4FF').fontColor('#168BEE').bindMenu(this.noteList.map((note: LessonNote): MenuElement => { return { value: note.title || '课堂笔记', action: () => this.switchNote(note.id || 'default') }; }))
-          Button('新建').height(30).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.createNote())
-          Button('管理').id('notes-manager').height(30).fontSize(11).backgroundColor(this.managerOpen ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => this.openManager())
-          Button('导出').height(30).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').bindMenu([{ value: 'HTML（含图片）', action: () => this.export('html') }, { value: 'Markdown（含图片 ZIP）', action: () => this.export('md') }, { value: '纯文本', action: () => this.export('txt') }])
-          Button('图片').height(30).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').bindMenu(this.mediaMenu)
-          Button('设置').height(30).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.colorsOpen = !this.colorsOpen)
+          Button() { DropdownLabel({ label: this.activeNoteTitle + '', labelSize: 11 }) }.padding(0).fontSize(11).height(30).backgroundColor('#E2F0FF').fontColor('#1F7BFF').bindMenu(this.noteList.map((note: LessonNote): MenuElement => { return { value: note.title || '课堂笔记', action: () => this.switchNote(note.id || 'default') }; }))
+          Button('新建').height(30).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.createNote())
+          Button('管理').id('notes-manager').height(30).fontSize(11).backgroundColor(this.managerOpen ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => this.openManager())
+          Button('导出').height(30).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').bindMenu([{ value: 'HTML（含图片）', action: () => this.export('html') }, { value: 'Markdown（含图片 ZIP）', action: () => this.export('md') }, { value: '纯文本', action: () => this.export('txt') }])
+          Button('图片').height(30).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').bindMenu(this.mediaMenu)
+          Button('设置').height(30).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.colorsOpen = !this.colorsOpen)
         } }.layoutWeight(1).height(32).align(Alignment.End).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
       }.width('100%').onTouch((event: TouchEvent) => { if (event.type === TouchType.Down) { this.dismissWhole(); NativeSelections.clear(); } })
       if (this.managerOpen) { this.noteManager() }
@@ -374,16 +374,16 @@ export struct NotesPane {
       Column({ space: 10 }) {
         Scroll() {
         Row({ space: 2 }) {
-          Button('B').fontWeight(FontWeight.Bold).height(30).width(this.formatWidth()).padding(0).fontSize(12).fontColor('#168BEE').backgroundColor(this.bold ? '#DDEEFF' : '#EAF4FF').onClick(() => this.format('bold'))
-          Button('I').fontStyle(FontStyle.Italic).height(30).width(this.formatWidth()).padding(0).fontSize(12).fontColor('#168BEE').backgroundColor(this.italic ? '#DDEEFF' : '#EAF4FF').onClick(() => this.format('italic'))
-          Button('U').height(30).width(this.formatWidth()).padding(0).fontSize(12).fontColor('#168BEE').backgroundColor(this.underline ? '#DDEEFF' : '#EAF4FF').onClick(() => this.format('underline'))
-          Button('S̶').height(30).width(this.formatWidth()).padding(0).fontSize(12).fontColor('#168BEE').backgroundColor(this.strikethrough ? '#DDEEFF' : '#EAF4FF').onClick(() => this.format('strikethrough'))
-          Button('末尾').id('notes-end').height(30).width(46).padding(0).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.goToEnd())
+          Button('B').fontWeight(FontWeight.Bold).height(30).width(this.formatWidth()).padding(0).fontSize(12).fontColor('#1F7BFF').backgroundColor(this.bold ? '#DDEEFF' : '#E2F0FF').onClick(() => this.format('bold'))
+          Button('I').fontStyle(FontStyle.Italic).height(30).width(this.formatWidth()).padding(0).fontSize(12).fontColor('#1F7BFF').backgroundColor(this.italic ? '#DDEEFF' : '#E2F0FF').onClick(() => this.format('italic'))
+          Button('U').height(30).width(this.formatWidth()).padding(0).fontSize(12).fontColor('#1F7BFF').backgroundColor(this.underline ? '#DDEEFF' : '#E2F0FF').onClick(() => this.format('underline'))
+          Button('S̶').height(30).width(this.formatWidth()).padding(0).fontSize(12).fontColor('#1F7BFF').backgroundColor(this.strikethrough ? '#DDEEFF' : '#E2F0FF').onClick(() => this.format('strikethrough'))
+          Button('末尾').id('notes-end').height(30).width(46).padding(0).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.goToEnd())
           if (this.returnVisible) { ReturnAction({ owner: 'notes', onReturn: this.onReturn }) }
           Blank()
-          Button('左').height(30).width(this.formatWidth()).padding(0).fontSize(11).backgroundColor(this.alignment === 'left' ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => this.alignParagraph('left'))
-          Button('中').height(30).width(this.formatWidth()).padding(0).fontSize(11).backgroundColor(this.alignment === 'center' ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => this.alignParagraph('center'))
-          Button('右').height(30).width(this.formatWidth()).padding(0).fontSize(11).backgroundColor(this.alignment === 'right' ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => this.alignParagraph('right'))
+          Button('左').height(30).width(this.formatWidth()).padding(0).fontSize(11).backgroundColor(this.alignment === 'left' ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => this.alignParagraph('left'))
+          Button('中').height(30).width(this.formatWidth()).padding(0).fontSize(11).backgroundColor(this.alignment === 'center' ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => this.alignParagraph('center'))
+          Button('右').height(30).width(this.formatWidth()).padding(0).fontSize(11).backgroundColor(this.alignment === 'right' ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => this.alignParagraph('right'))
         }.width('100%').constraintSize({ minWidth: this.formatWidth() * 7 + 62 + (this.returnVisible ? 100 : 0) })
         }.height(32).width('100%').scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
         Stack({ alignContent: Alignment.TopStart }) {
@@ -391,7 +391,7 @@ export struct NotesPane {
           ForEach(this.blocks, (block: NoteBlock, index: number) => { ListItem() {
             Stack({ alignContent: Alignment.TopStart }) {
               Column({ space: 2 }) { this.gap(block.id); this.blockCard(block); }.width('100%').padding({ bottom: index < this.blocks.length - 1 ? 10 : 0 }).onAreaChange((oldArea: Area, area: Area) => this.rowMeasured(block.id, Number(area.height)))
-              if (this.wholeSelection) { Column().width('100%').height(this.rowHeights[block.id] || 0).backgroundColor('#168BEE26').borderRadius(8).position({ x: 0, y: 0 }).hitTestBehavior(HitTestMode.None) }
+              if (this.wholeSelection) { Column().width('100%').height(this.rowHeights[block.id] || 0).backgroundColor('#1F7BFF26').borderRadius(8).position({ x: 0, y: 0 }).hitTestBehavior(HitTestMode.None) }
             }.width('100%').onTouch((event: TouchEvent) => { if (this.wholeSelection) event.stopPropagation(); }).onMouse((event: MouseEvent) => { if (this.wholeSelection) event.stopPropagation(); })
           } }, (block: NoteBlock) => block.id)
         }.layoutWeight(1).width('100%').align(Alignment.TopStart).enableScrollInteraction(!this.draggingText).onGestureJudgeBegin((info: GestureInfo, event: BaseGestureEvent) => this.draggingText && info.type === GestureControl.GestureType.PAN_GESTURE ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE).scrollBar(BarState.Auto).onAreaChange((oldArea: Area, area: Area) => this.editorWidth = Number(area.width))

@@ -225,7 +225,7 @@ export struct TranscriptText {
     Stack({ alignContent: Alignment.TopStart }) {
       // One native text node makes the selection continuous across timestamp boundaries.
       Text(undefined, { controller: this.controller }) {
-        ForEach(this.runs, (run: TranscriptRun) => { Span(run.value).fontColor(run.active ? '#168BEE' : '#2E4054').textBackgroundStyle({ color: run.highlight ? '#DDEEFF' : Color.Transparent }) }, (run: TranscriptRun) => run.key + ':' + run.active + ':' + run.highlight)
+        ForEach(this.runs, (run: TranscriptRun) => { Span(run.value).fontColor(run.active ? '#1F7BFF' : '#2E4054').textBackgroundStyle({ color: run.highlight ? '#DDEEFF' : Color.Transparent }) }, (run: TranscriptRun) => run.key + ':' + run.active + ':' + run.highlight)
       }.id('transcript-text-' + this.pageKey).fontSize(this.compact ? 13 : 14).fontColor('#2E4054').lineHeight(this.lineHeight())
         .width('calc(100% - 44vp)').margin({ left: 44 }).textAlign(TextAlign.Start)
         .copyOption(CopyOptions.LocalDevice).textSelectable(TextSelectableMode.SELECTABLE_FOCUSABLE).focusable(true).focusOnTouch(true).onHover((active: boolean) => { if (active) this.getUIContext().getCursorController().setCursor(pointer.PointerStyle.TEXT_CURSOR); else this.getUIContext().getCursorController().restoreDefault(); })

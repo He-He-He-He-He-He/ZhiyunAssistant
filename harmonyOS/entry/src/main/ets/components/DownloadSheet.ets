@@ -197,23 +197,23 @@ export struct DownloadSheet {
   @Builder
   private lessonRow(c: Course) {
     Row({ space: 12 }) {
-      Text(this.chosen.includes(c.subId) ? '✓' : '○').fontSize(20).fontColor('#168BEE')
+      Text(this.chosen.includes(c.subId) ? '✓' : '○').fontSize(20).fontColor('#1F7BFF')
       Column({ space: 4 }) {
-        Text(c.title).fontSize(15).fontColor('#20344D').maxLines(2)
-        Text(`${shanghaiDate(c.start)} ${clockTime(c.start)} · ${c.teacher}`).fontSize(11).fontColor('#7C899A')
+        Text(c.title).fontSize(15).fontColor('#0F2340').maxLines(2)
+        Text(`${shanghaiDate(c.start)} ${clockTime(c.start)} · ${c.teacher}`).fontSize(11).fontColor('#566A85')
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-    }.padding(12).width('100%').backgroundColor(this.chosen.includes(c.subId) ? '#EAF4FF' : '#FFFFFF').borderRadius(10).onClick(() => this.toggle(c.subId))
+    }.padding(12).width('100%').backgroundColor(this.chosen.includes(c.subId) ? '#E2F0FF' : '#FFFFFF').borderRadius(10).onClick(() => this.toggle(c.subId))
   }
   @Builder
   private calendarPanel() {
     Column({ space: 12 }) {
       Row({ space: 8 }) {
-        Button('«').accessibilityText('上一年').width(32).height(32).backgroundColor('#F1F3F5').fontColor('#168BEE').onClick(() => this.shiftMonth(-12))
-        Button('‹').accessibilityText('上个月').width(32).height(32).backgroundColor('#F1F3F5').fontColor('#168BEE').onClick(() => this.shiftMonth(-1))
-        Text(this.monthTitle()).fontSize(16).fontWeight(FontWeight.Medium).fontColor('#20344D').layoutWeight(1).textAlign(TextAlign.Center)
-        Button('›').width(36).height(32).backgroundColor('#F1F3F5').fontColor('#168BEE').onClick(() => this.shiftMonth(1))
-        Button('»').accessibilityText('下一年').width(32).height(32).backgroundColor('#F1F3F5').fontColor('#168BEE').onClick(() => this.shiftMonth(12))
-        Button('取消').height(30).fontSize(12).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.calendarOpen = false)
+        Button('«').accessibilityText('上一年').width(32).height(32).backgroundColor('#EEF6FF').fontColor('#1F7BFF').onClick(() => this.shiftMonth(-12))
+        Button('‹').accessibilityText('上个月').width(32).height(32).backgroundColor('#EEF6FF').fontColor('#1F7BFF').onClick(() => this.shiftMonth(-1))
+        Text(this.monthTitle()).fontSize(16).fontWeight(FontWeight.Medium).fontColor('#0F2340').layoutWeight(1).textAlign(TextAlign.Center)
+        Button('›').width(36).height(32).backgroundColor('#EEF6FF').fontColor('#1F7BFF').onClick(() => this.shiftMonth(1))
+        Button('»').accessibilityText('下一年').width(32).height(32).backgroundColor('#EEF6FF').fontColor('#1F7BFF').onClick(() => this.shiftMonth(12))
+        Button('取消').height(30).fontSize(12).backgroundColor(Color.Transparent).fontColor('#1F7BFF').onClick(() => this.calendarOpen = false)
       }.width('100%')
       Row() {
         ForEach(['一', '二', '三', '四', '五', '六', '日'], (label: string) => { Text(label).layoutWeight(1).height(28).fontSize(12).fontColor('#8A9CB0').textAlign(TextAlign.Center) }, (label: string) => label)
@@ -224,8 +224,8 @@ export struct DownloadSheet {
             ForEach(this.calendarCells().slice(week * 7, week * 7 + 7), (cell: CalendarCell) => {
               Button({ type: ButtonType.Normal }) {
                 Column({ space: 2 }) {
-                  Text(cell.day).fontSize(15).fontWeight(cell.count ? FontWeight.Medium : FontWeight.Normal).fontColor(cell.count ? '#168BEE' : cell.inMonth ? '#68778B' : '#CAD1DA')
-                  Text(cell.count ? String(cell.count) + '节' : ' ').fontSize(9).fontColor('#168BEE')
+                  Text(cell.day).fontSize(15).fontWeight(cell.count ? FontWeight.Medium : FontWeight.Normal).fontColor(cell.count ? '#1F7BFF' : cell.inMonth ? '#68778B' : '#CAD1DA')
+                  Text(cell.count ? String(cell.count) + '节' : ' ').fontSize(9).fontColor('#1F7BFF')
                 }.width('100%').justifyContent(FlexAlign.Center)
               }.layoutWeight(1).height(this.calendarDayHeight()).padding(0).backgroundColor(this.selectedDate === cell.date ? '#DDEEFF' : Color.Transparent).borderRadius(10).enabled(cell.inMonth)
                 .onClick(() => { this.selectedDate = cell.date; this.calendarOpen = false; })
@@ -233,64 +233,64 @@ export struct DownloadSheet {
           }.width('100%')
         }, (week: number) => String(week))
       }.width('100%')
-      Text('所有日期均可选择 · 蓝色日期已有可下载课程').fontSize(11).fontColor('#7C899A').width('100%')
+      Text('所有日期均可选择 · 蓝色日期已有可下载课程').fontSize(11).fontColor('#566A85').width('100%')
     }.padding(14).width('100%').backgroundColor('#FFFFFF').borderRadius(12)
       .parallelGesture(PanGesture({ direction: PanDirection.Horizontal, distance: 12 }).onActionEnd((event: GestureEvent) => { if (Math.abs(event.offsetX) >= 30) this.shiftMonth(event.offsetX < 0 ? 1 : -1); }))
   }
   build() {
     Column({ space: 12 }) {
       Row() {
-        Text('下载课程').fontSize(22).fontWeight(FontWeight.Bold).fontColor('#20344D')
+        Text('下载课程').fontSize(22).fontWeight(FontWeight.Bold).fontColor('#0F2340')
         Blank()
-        Button(this.fullPage ? '返回' : '关闭').height(30).fontSize(12).fontColor('#168BEE').backgroundColor('#F1F3F5').onClick(() => this.onClose())
+        Button(this.fullPage ? '返回' : '关闭').height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor('#EEF6FF').onClick(() => this.onClose())
       }.width('100%')
       if (this.calendarOpen) { this.calendarPanel() } else {
       Row({ space: 8 }) {
-        Button(this.video ? '✓ 视频' : '视频').height(32).fontSize(13).fontColor('#168BEE').backgroundColor(this.video ? '#DDEEFF' : '#EAF4FF').onClick(() => this.video = !this.video)
-        Button(this.slides ? '✓ 课件' : '课件').height(32).fontSize(13).fontColor('#168BEE').backgroundColor(this.slides ? '#DDEEFF' : '#EAF4FF').onClick(() => this.slides = !this.slides)
-        Button(this.transcript ? '✓ 转写' : '转写').height(32).fontSize(13).fontColor('#168BEE').backgroundColor(this.transcript ? '#DDEEFF' : '#EAF4FF').onClick(() => this.transcript = !this.transcript)
+        Button(this.video ? '✓ 视频' : '视频').height(32).fontSize(13).fontColor('#1F7BFF').backgroundColor(this.video ? '#DDEEFF' : '#E2F0FF').onClick(() => this.video = !this.video)
+        Button(this.slides ? '✓ 课件' : '课件').height(32).fontSize(13).fontColor('#1F7BFF').backgroundColor(this.slides ? '#DDEEFF' : '#E2F0FF').onClick(() => this.slides = !this.slides)
+        Button(this.transcript ? '✓ 转写' : '转写').height(32).fontSize(13).fontColor('#1F7BFF').backgroundColor(this.transcript ? '#DDEEFF' : '#E2F0FF').onClick(() => this.transcript = !this.transcript)
       }.width('100%')
       Row({ space: 8 }) {
-        Button('▦ 按日期').height(32).fontSize(13).fontColor('#168BEE').backgroundColor(!this.byCourse ? '#DDEEFF' : '#EAF4FF').onClick(() => this.setMode(false))
-        Button('按课程').height(32).fontSize(13).fontColor('#168BEE').backgroundColor(this.byCourse ? '#DDEEFF' : '#EAF4FF').onClick(() => this.setMode(true))
+        Button('▦ 按日期').height(32).fontSize(13).fontColor('#1F7BFF').backgroundColor(!this.byCourse ? '#DDEEFF' : '#E2F0FF').onClick(() => this.setMode(false))
+        Button('按课程').height(32).fontSize(13).fontColor('#1F7BFF').backgroundColor(this.byCourse ? '#DDEEFF' : '#E2F0FF').onClick(() => this.setMode(true))
         if (this.scoped) {
           if (!this.newLessons) { Blank() }
-          if (this.discovering) { LoadingProgress().width(18).height(18).color('#168BEE') }
-          if (this.newLessons > 0) { Button('新增 ' + this.newLessons + ' 节 · 更新').layoutWeight(1).height(30).fontSize(10).fontColor('#168BEE').backgroundColor(Color.Transparent).onClick(() => this.applyDiscoveries()) }
-          Button('刷新').height(30).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => { this.applyDiscoveries(); this.onRefreshScope(); })
+          if (this.discovering) { LoadingProgress().width(18).height(18).color('#1F7BFF') }
+          if (this.newLessons > 0) { Button('新增 ' + this.newLessons + ' 节 · 更新').layoutWeight(1).height(30).fontSize(10).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.applyDiscoveries()) }
+          Button('刷新').height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => { this.applyDiscoveries(); this.onRefreshScope(); })
         }
-        if (this.loading) { LoadingProgress().width(20).height(20).color('#168BEE') }
-        if (this.historyProgress) { Text(this.historyProgress).fontSize(11).fontColor('#71839A').layoutWeight(1) }
-        else if (!this.historyComplete && this.account) { Button('继续读取').height(28).fontSize(11).fontColor('#168BEE').backgroundColor('#F1F3F5').onClick(() => this.loadHistory()) }
-        else if (this.historyComplete && this.account && !this.scoped) { Button('刷新课表').height(28).fontSize(11).fontColor('#168BEE').backgroundColor('#F1F3F5').onClick(() => this.loadHistory(true)) }
+        if (this.loading) { LoadingProgress().width(20).height(20).color('#1F7BFF') }
+        if (this.historyProgress) { Text(this.historyProgress).fontSize(11).fontColor('#566A85').layoutWeight(1) }
+        else if (!this.historyComplete && this.account) { Button('继续读取').height(28).fontSize(11).fontColor('#1F7BFF').backgroundColor('#EEF6FF').onClick(() => this.loadHistory()) }
+        else if (this.historyComplete && this.account && !this.scoped) { Button('刷新课表').height(28).fontSize(11).fontColor('#1F7BFF').backgroundColor('#EEF6FF').onClick(() => this.loadHistory(true)) }
       }.width('100%')
-      if (this.scoped && !this.permitted().length) { Text(this.discovering ? '暂无已确认可下载的课程，正在后台确认权限' : '当前范围内没有可下载的有权限课程').fontSize(13).fontColor('#71839A').width('100%') }
-      if (this.checkingAccess) { Text('正在确认可下载课次…').fontSize(12).fontColor('#71839A').width('100%') }
+      if (this.scoped && !this.permitted().length) { Text(this.discovering ? '暂无已确认可下载的课程，正在后台确认权限' : '当前范围内没有可下载的有权限课程').fontSize(13).fontColor('#566A85').width('100%') }
+      if (this.checkingAccess) { Text('正在确认可下载课次…').fontSize(12).fontColor('#566A85').width('100%') }
       if (this.notice) { Text(this.notice).fontSize(12).fontColor('#AE6B41').width('100%') }
       if (this.byCourse && !this.selectedCourseId) {
         TextInput({ controller: this.searchInput.controller, text: this.searchText, placeholder: '搜索已上过的课程' }).onKeyPreIme((event: KeyEvent): boolean => this.searchInput.digit(event, this.searchText, (value: string) => this.searchText = value)).height(40).backgroundColor('#FFFFFF').onChange((value: string) => this.searchText = value).onBlur(() => this.searchInput.reset())
       }
       if (this.byCourse && this.selectedCourseId) {
         Row({ space: 8 }) {
-          Button('‹ 课程').height(30).fontSize(12).fontColor('#168BEE').backgroundColor('#F1F3F5').onClick(() => this.selectedCourseId = '')
+          Button('‹ 课程').height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor('#EEF6FF').onClick(() => this.selectedCourseId = '')
           Text(this.courseTitle(this.selectedCourseId)).fontSize(14).fontWeight(FontWeight.Medium).fontColor('#294765').layoutWeight(1).maxLines(1)
 
         }.width('100%')
-      } else if (this.byCourse) { Text('按最近上课时间排序 · 选择课程后可查看各日期课次').fontSize(12).fontColor('#71839A').width('100%') }
+      } else if (this.byCourse) { Text('按最近上课时间排序 · 选择课程后可查看各日期课次').fontSize(12).fontColor('#566A85').width('100%') }
       else {
         Row({ space: 8 }) {
-          Button('▦ ' + (this.selectedDate || '跳转日期')).height(30).fontSize(12).fontColor('#168BEE').backgroundColor('#F1F3F5').onClick(() => this.calendarOpen = !this.calendarOpen)
-          if (this.selectedDate) { Button('显示全部日期').height(30).fontSize(12).fontColor('#168BEE').backgroundColor(Color.Transparent).onClick(() => this.selectedDate = '') }
+          Button('▦ ' + (this.selectedDate || '跳转日期')).height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor('#EEF6FF').onClick(() => this.calendarOpen = !this.calendarOpen)
+          if (this.selectedDate) { Button('显示全部日期').height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.selectedDate = '') }
           Blank()
-          Text('按最近上课时间排序').fontSize(11).fontColor('#7C899A')
+          Text('按最近上课时间排序').fontSize(11).fontColor('#566A85')
         }.width('100%')
       }
-      if (this.dateEmptyMessage()) { Text(this.dateEmptyMessage()).fontSize(13).fontColor('#71839A').width('100%') }
+      if (this.dateEmptyMessage()) { Text(this.dateEmptyMessage()).fontSize(13).fontColor('#566A85').width('100%') }
       Column({ space: 8 }) {
         Row() {
-          Text(`已选 ${this.chosen.length} 节`).fontSize(12).fontColor('#7C899A')
+          Text(`已选 ${this.chosen.length} 节`).fontSize(12).fontColor('#566A85')
           Blank()
-          Button(scopeSelected(this.chosen, this.selectionScope()) ? '取消全选' : '全选').height(28).fontSize(12).fontColor('#168BEE').backgroundColor(Color.Transparent).onClick(() => this.chosen = toggleScopedSelection(this.chosen, this.selectionScope()))
+          Button(scopeSelected(this.chosen, this.selectionScope()) ? '取消全选' : '全选').height(28).fontSize(12).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.chosen = toggleScopedSelection(this.chosen, this.selectionScope()))
         }.width('100%')
         List({ space: 8 }) {
           if (!this.byCourse) {
@@ -298,7 +298,7 @@ export struct DownloadSheet {
               ListItem() {
                 Row() {
                   Text(section.title).fontSize(15).fontWeight(FontWeight.Medium).fontColor('#294765').layoutWeight(1)
-                  Button(this.selected(section) ? '取消全选' : '全选').height(28).fontSize(12).fontColor('#168BEE').backgroundColor(Color.Transparent).onClick(() => this.toggleSection(section))
+                  Button(this.selected(section) ? '取消全选' : '全选').height(28).fontSize(12).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.toggleSection(section))
                 }.width('100%').padding({ top: 10, bottom: 4 })
               }
               ForEach(section.courses, (c: Course) => { ListItem() { this.lessonRow(c) } }, (c: Course) => c.subId)
@@ -307,9 +307,9 @@ export struct DownloadSheet {
             ForEach(this.filteredSections(true), (section: CourseSection) => {
               ListItem() {
                 Row({ space: 12 }) {
-                  Column({ space: 4 }) { Text(section.title).fontSize(15).fontWeight(FontWeight.Medium).fontColor('#20344D').maxLines(2); Text(`${this.dateCount(section)} 个日期 · 已选 ${this.selectedCount(section.id)} 节`).fontSize(11).fontColor('#7C899A') }.layoutWeight(1).alignItems(HorizontalAlign.Start).onClick(() => this.openCourse(section.id))
-                  Button(this.catalogueBusy.includes(section.id) ? '读取中' : this.selected(section) ? '取消全选' : '全选').height(30).fontSize(12).fontColor('#168BEE').backgroundColor('#F1F3F5').enabled(!this.catalogueBusy.includes(section.id)).onClick(() => this.toggleCourse(section.id))
-                  Text('›').fontSize(22).fontColor('#168BEE').onClick(() => this.openCourse(section.id))
+                  Column({ space: 4 }) { Text(section.title).fontSize(15).fontWeight(FontWeight.Medium).fontColor('#0F2340').maxLines(2); Text(`${this.dateCount(section)} 个日期 · 已选 ${this.selectedCount(section.id)} 节`).fontSize(11).fontColor('#566A85') }.layoutWeight(1).alignItems(HorizontalAlign.Start).onClick(() => this.openCourse(section.id))
+                  Button(this.catalogueBusy.includes(section.id) ? '读取中' : this.selected(section) ? '取消全选' : '全选').height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor('#EEF6FF').enabled(!this.catalogueBusy.includes(section.id)).onClick(() => this.toggleCourse(section.id))
+                  Text('›').fontSize(22).fontColor('#1F7BFF').onClick(() => this.openCourse(section.id))
                 }.width('100%').padding(14).backgroundColor('#FFFFFF').borderRadius(10)
               }
             }, (section: CourseSection) => section.id)
@@ -318,8 +318,8 @@ export struct DownloadSheet {
           }
         }.id('download-course-list').width('100%').layoutWeight(1)
       }.width('100%').layoutWeight(1)
-      Text('下载可暂停，稍后可在离线课程中继续。').fontSize(11).fontColor('#7C899A').width('100%')
-      Button(`下载 ${this.chosen.length} 节课程`).height(42).width('100%').fontSize(15).fontColor('#FFFFFF').backgroundColor('#168BEE').enabled(this.chosen.length > 0 && (this.video || this.slides || this.transcript))
+      Text('下载可暂停，稍后可在离线课程中继续。').fontSize(11).fontColor('#566A85').width('100%')
+      Button(`下载 ${this.chosen.length} 节课程`).height(42).width('100%').fontSize(15).fontColor('#FFFFFF').backgroundColor('#1F7BFF').enabled(this.chosen.length > 0 && (this.video || this.slides || this.transcript))
         .onClick(() => { this.onDownload(this.permitted().filter((c: Course) => this.chosen.includes(c.subId)), { video: this.video, slides: this.slides, transcript: this.transcript }); this.onClose(); })
       }
     }.id('batch-download-content').width('100%').height('100%').padding(20).backgroundColor('#F4F7FB').onAreaChange((oldArea: Area, area: Area) => this.sheetHeight = Number(area.height))

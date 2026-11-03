@@ -92,7 +92,7 @@ export struct PageCard {
       if (this.insertOpen && this.notesOpen) { Column() { this.insertPopup() }.position({ x: Math.max(4, (this.imageWidth() - Math.min(112, Math.max(40, this.imageWidth() - 16))) / 2), y: Math.max(4, this.imageHeight() - 44) }) }
       }.width(this.imageWidth()).height(this.imageHeight())
     } else {
-      Column() { LoadingProgress().width(28).height(28).color('#168BEE') }
+      Column() { LoadingProgress().width(28).height(28).color('#1F7BFF') }
         .width('100%').height('100%').justifyContent(FlexAlign.Center)
     }
   }
@@ -102,12 +102,12 @@ export struct PageCard {
       Row() {
         Text('课堂转写').fontSize(13).fontWeight(FontWeight.Medium).fontColor('#294765')
         Blank()
-        Button('复制').fontSize(11).fontColor('#168BEE').backgroundColor('#E5F1FF').height(26)
+        Button('复制').fontSize(11).fontColor('#1F7BFF').backgroundColor('#E5F1FF').height(26)
           .enabled(this.group.lines.length > 0).onClick(() => this.copyPage())
       }.width('100%').height(34)
       Scroll(this.transcriptScroller) {
         Column({ space: 7 }) {
-          if (!this.group.lines.length) { Text(this.transcriptState || '暂无转写').fontSize(13).fontColor('#7C899A').lineHeight(22) }
+          if (!this.group.lines.length) { Text(this.transcriptState || '暂无转写').fontSize(13).fontColor('#566A85').lineHeight(22) }
           if (this.group.lines.length) { TranscriptText({ pageKey: this.group.slide.id, pageStart: this.group.slide.t, lines: this.group.lines, compact: this.cardWidth < 480, notesOpen: this.notesOpen, highlightAt: this.highlightAt, highlightSource: this.highlightSource, onHighlightPosition: (top: number): void => { this.transcriptScroller.scrollTo({ xOffset: 0, yOffset: Math.max(0, top - 20), animation: { duration: 120 } }); }, onInsert: (value: NoteInsertion) => this.onInsert(value) }) }
         }.width('100%').alignItems(HorizontalAlign.Start).padding({ top: 8, bottom: 12 })
       }.layoutWeight(1).scrollBar(BarState.Auto).align(Alignment.TopStart).width('100%')

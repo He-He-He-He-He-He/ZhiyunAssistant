@@ -35,12 +35,12 @@ export struct PaneFrame {
       if (this.adjustable && this.selected) { PaneHandles({ rect: this.rect, canvasWidth: this.canvasWidth, canvasHeight: this.canvasHeight, movable: false, onChange: this.onChange }) }
       if (this.controls) {
         Stack({ alignContent: Alignment.Center }) {
-          Column().width(30).height(3).backgroundColor(this.selected && this.adjustable ? '#168BEE' : '#A7B2BF').borderRadius(2)
+          Column().width(30).height(3).backgroundColor(this.selected && this.adjustable ? '#1F7BFF' : '#A7B2BF').borderRadius(2)
         }.id('move-' + this.rect.id).width(this.handleWidth()).height(14).position({ x: this.handleX(), y: 0 })
           .onClick(() => this.select())
           .gesture(PanGesture({ direction: PanDirection.All, distance: 2 }).onActionStart(() => this.begin()).onActionUpdate((event: GestureEvent) => this.move(event)))
       }
-    }.width('100%').height('100%').id(this.namespace + 'pane-' + this.rect.id).onClick(() => this.onActivate()).backgroundColor(this.transparentWhenClosed && !this.controls ? Color.Transparent : STUDY_SURFACE).border({ width: this.selected && this.adjustable ? 1 : 0, color: '#168BEE' }).borderRadius(this.controls ? STUDY_RADIUS : 0).clip(true)
+    }.width('100%').height('100%').id(this.namespace + 'pane-' + this.rect.id).onClick(() => this.onActivate()).backgroundColor(this.transparentWhenClosed && !this.controls ? Color.Transparent : STUDY_SURFACE).border({ width: this.selected && this.adjustable ? 1 : 0, color: '#1F7BFF' }).borderRadius(this.controls ? STUDY_RADIUS : 0).clip(true)
       .onTouch((event: TouchEvent) => { if (event.type === TouchType.Down) this.focusBackground(); })
   }
 }

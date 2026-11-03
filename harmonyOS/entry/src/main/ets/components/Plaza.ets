@@ -197,54 +197,54 @@ export struct Plaza {
     if (this.calendarOpen) { DateCalendar({ knownDates: false, selectedDate: this.date, courses: this.courses, onClose: () => this.calendarOpen = false, onSelect: (date: string) => { this.calendarOpen = false; this.date = date; this.load(); } }).layoutWeight(1) } else {
     Column({ space: 12 }) {
       Row() {
-        Button('‹ 返回').fontSize(12).height(34).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.navigateBack())
+        Button('‹ 返回').fontSize(12).height(34).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.navigateBack())
         Blank()
-        Text('课程广场').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#20344D')
+        Text('课程广场').fontSize(20).fontWeight(FontWeight.Bold).fontColor('#0F2340')
         Blank()
-        Button('刷新').fontSize(13).height(34).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.load(false, true))
+        Button('刷新').fontSize(13).height(34).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.load(false, true))
       }.width('100%')
       Row({ space: 8 }) {
-        Button() { DropdownLabel({ label: this.teacherSearch ? '教师' : '课程', labelSize: 13 }) }.padding(0).fontSize(13).height(40).backgroundColor('#EAF4FF').fontColor('#168BEE')
+        Button() { DropdownLabel({ label: this.teacherSearch ? '教师' : '课程', labelSize: 13 }) }.padding(0).fontSize(13).height(40).backgroundColor('#E2F0FF').fontColor('#1F7BFF')
           .bindMenu([{ value: '课程', action: () => this.chooseSearchMode(false) }, { value: '教师', action: () => this.chooseSearchMode(true) }])
         TextInput({ controller: this.queryInput.controller, text: this.query, placeholder: this.teacherSearch ? '搜索教师' : '搜索全部课程' }).onKeyPreIme((event: KeyEvent): boolean => this.queryInput.digit(event, this.query, (value: string) => this.query = value)).height(42).layoutWeight(1).backgroundColor('#FFFFFF').onBlur(() => this.queryInput.reset())
           .onChange((value: string) => { this.query = value; }).onSubmit(() => this.load())
-        Button('搜索').fontSize(13).height(40).backgroundColor('#168BEE').fontColor('#FFFFFF').onClick(() => this.load())
+        Button('搜索').fontSize(13).height(40).backgroundColor('#1F7BFF').fontColor('#FFFFFF').onClick(() => this.load())
       }.width('100%')
       if (this.chapterTitle) {
         Row() {
-          Button('‹ 搜索结果').fontSize(12).height(32).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.navigateBack())
-          if (this.busy || this.checking) { LoadingProgress().height(18).width(18).color('#168BEE') }
+          Button('‹ 搜索结果').fontSize(12).height(32).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.navigateBack())
+          if (this.busy || this.checking) { LoadingProgress().height(18).width(18).color('#1F7BFF') }
           Text(this.chapterTitle).fontSize(16).fontWeight(FontWeight.Medium).layoutWeight(1).margin({ left: 12 }).maxLines(1)
           if (this.chapterCourse) { CollectionActions({ collections: this.collections, revision: this.collectionRevision, course: this.chapterCourse, known: this.courses }) }
-          Button('批量下载').fontSize(12).height(32).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.downloadScope())
+          Button('批量下载').fontSize(12).height(32).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.downloadScope())
         }.width('100%')
       } else if (!this.searching) {
         Row({ space: 8 }) {
-          Button('‹').height(32).width(34).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.changeDay(-1))
-          Button('▦ ' + this.date).height(36).layoutWeight(1).fontSize(13).fontColor('#20344D').backgroundColor('#FFFFFF').onClick(() => this.calendarOpen = true)
-          Button('›').height(32).width(34).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.changeDay(1))
+          Button('‹').height(32).width(34).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.changeDay(-1))
+          Button('▦ ' + this.date).height(36).layoutWeight(1).fontSize(13).fontColor('#0F2340').backgroundColor('#FFFFFF').onClick(() => this.calendarOpen = true)
+          Button('›').height(32).width(34).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.changeDay(1))
 
         }.width('100%')
       }
       if (!this.searching && !this.chapterTitle) { Row({ space: 6 }) {
-        Text(String(this.courses.length) + ' 节').fontSize(12).fontColor('#71839A')
-        if (this.busy || this.checking) { LoadingProgress().height(18).width(18).color('#168BEE') }
+        Text(String(this.courses.length) + ' 节').fontSize(12).fontColor('#566A85')
+        if (this.busy || this.checking) { LoadingProgress().height(18).width(18).color('#1F7BFF') }
         if (!this.chapterTitle) {
-          Button(this.liveOnly ? '全部' : '✓ 全部').height(32).fontSize(12).fontColor(this.liveOnly ? '#168BEE' : '#FFFFFF').backgroundColor(this.liveOnly ? '#EAF4FF' : '#168BEE').onClick(() => { if (this.liveOnly) { this.liveOnly = false; this.load(); } })
-          Button(this.liveOnly ? '✓ 直播中' : '直播中').height(32).fontSize(12).fontColor(this.liveOnly ? '#FFFFFF' : '#168BEE').backgroundColor(this.liveOnly ? '#168BEE' : '#EAF4FF').onClick(() => { if (!this.liveOnly) { this.liveOnly = true; this.load(); } })
+          Button(this.liveOnly ? '全部' : '✓ 全部').height(32).fontSize(12).fontColor(this.liveOnly ? '#1F7BFF' : '#FFFFFF').backgroundColor(this.liveOnly ? '#E2F0FF' : '#1F7BFF').onClick(() => { if (this.liveOnly) { this.liveOnly = false; this.load(); } })
+          Button(this.liveOnly ? '✓ 直播中' : '直播中').height(32).fontSize(12).fontColor(this.liveOnly ? '#FFFFFF' : '#1F7BFF').backgroundColor(this.liveOnly ? '#1F7BFF' : '#E2F0FF').onClick(() => { if (!this.liveOnly) { this.liveOnly = true; this.load(); } })
         }
-        Blank(); Button('批量下载').fontSize(12).height(32).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.downloadScope())
+        Blank(); Button('批量下载').fontSize(12).height(32).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.downloadScope())
       }.width('100%') }
       if (this.searching && !this.chapterTitle) {
         Row({ space: 6 }) {
-          Text(String(this.filteredHits().length) + ' 门').fontSize(12).fontColor('#71839A')
-          if (this.busy || this.checking) { LoadingProgress().height(18).width(18).color('#168BEE') }
+          Text(String(this.filteredHits().length) + ' 门').fontSize(12).fontColor('#566A85')
+          if (this.busy || this.checking) { LoadingProgress().height(18).width(18).color('#1F7BFF') }
           Scroll() { Row({ space: 6 }) {
-            Button() { DropdownLabel({ label: (this.filterCounterpart || (this.searchByTeacher ? '课程' : '教师')) + '', labelSize: 12 }) }.padding(0).height(32).fontSize(12).backgroundColor('#EAF4FF').fontColor('#168BEE').bindMenu(this.filterMenu('counterpart'))
-            Button() { DropdownLabel({ label: (this.filterRoom || '教室') + '', labelSize: 12 }) }.padding(0).height(32).fontSize(12).backgroundColor('#EAF4FF').fontColor('#168BEE').bindMenu(this.filterMenu('room'))
-            Button() { DropdownLabel({ label: (this.filterTerm || '学期') + '', labelSize: 12 }) }.padding(0).height(32).fontSize(12).backgroundColor('#EAF4FF').fontColor('#168BEE').bindMenu(this.filterMenu('term'))
+            Button() { DropdownLabel({ label: (this.filterCounterpart || (this.searchByTeacher ? '课程' : '教师')) + '', labelSize: 12 }) }.padding(0).height(32).fontSize(12).backgroundColor('#E2F0FF').fontColor('#1F7BFF').bindMenu(this.filterMenu('counterpart'))
+            Button() { DropdownLabel({ label: (this.filterRoom || '教室') + '', labelSize: 12 }) }.padding(0).height(32).fontSize(12).backgroundColor('#E2F0FF').fontColor('#1F7BFF').bindMenu(this.filterMenu('room'))
+            Button() { DropdownLabel({ label: (this.filterTerm || '学期') + '', labelSize: 12 }) }.padding(0).height(32).fontSize(12).backgroundColor('#E2F0FF').fontColor('#1F7BFF').bindMenu(this.filterMenu('term'))
           } }.layoutWeight(1).height(34).align(Alignment.Start).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
-          Button('批量下载').height(32).fontSize(12).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.downloadScope())
+          Button('批量下载').height(32).fontSize(12).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.downloadScope())
         }.width('100%')
       }
 
@@ -253,18 +253,18 @@ export struct Plaza {
         List({ space: 10 }) {
           ForEach(['allowed', 'denied', 'unknown'], (state: string) => {
             if (this.hitsIn(state).length) {
-              ListItem() { Text(`${this.sectionTitle(state)} · ${this.hitsIn(state).length}`).fontSize(14).fontWeight(FontWeight.Medium).fontColor(state === 'allowed' ? '#168BEE' : '#7C899A').padding({ top: 10, bottom: 3 }) }
+              ListItem() { Text(`${this.sectionTitle(state)} · ${this.hitsIn(state).length}`).fontSize(14).fontWeight(FontWeight.Medium).fontColor(state === 'allowed' ? '#1F7BFF' : '#566A85').padding({ top: 10, bottom: 3 }) }
               ForEach(this.hitsIn(state), (hit: SearchCourse) => {
                 ListItem() {
                   Row({ space: 14 }) {
                     Column({ space: 8 }) {
-                      Text(hit.title).fontSize(18).fontWeight(FontWeight.Medium).fontColor('#20344D').maxLines(2)
-                      Text(`${hit.teacher}  ${hit.room}`).fontSize(12).fontColor('#7C899A')
+                      Text(hit.title).fontSize(18).fontWeight(FontWeight.Medium).fontColor('#0F2340').maxLines(2)
+                      Text(`${hit.teacher}  ${hit.room}`).fontSize(12).fontColor('#566A85')
                       if (hit.term) { Text(hit.term).fontSize(11).fontColor('#889AAF') }
                     }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                     Row({ space: 4 }) {
                     CollectionActions({ collections: this.collections, revision: this.collectionRevision, course: hit, known: this.chapters.get(hit.courseId) || [] })
-                    Button('课次 ›').height(36).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.open(hit))
+                    Button('课次 ›').height(36).fontSize(12).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.open(hit))
                     }.alignItems(VerticalAlign.Center)
                   }.width('100%').padding(20).backgroundColor('#FFFFFF').borderRadius(14)
                 }.onVisibleAreaChange([0.1], (visible: boolean) => this.markVisible(hit.courseId, visible, true))
@@ -272,9 +272,9 @@ export struct Plaza {
             }
           }, (state: string) => state)
           if (this.page * 20 < this.total && !this.busy && !this.checking) {
-            ListItem() { Button('加载更多').fontSize(13).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => { this.page++; this.load(true); }) }
+            ListItem() { Button('加载更多').fontSize(13).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => { this.page++; this.load(true); }) }
           }
-          if (!this.hits.length && !this.busy && !this.error) { ListItem() { Text('没有找到课程').fontSize(14).fontColor('#7C899A').padding(24) } }
+          if (!this.hits.length && !this.busy && !this.error) { ListItem() { Text('没有找到课程').fontSize(14).fontColor('#566A85').padding(24) } }
         }.layoutWeight(1).width('100%').scrollBar(BarState.Auto)
       } else {
         CourseList({ collections: this.collections, collectionRevision: this.collectionRevision, onVisible: (course: Course, visible: boolean) => this.markVisible(course.subId, visible, false), courses: this.courses, permissions: this.permissions, busy: this.busy || this.checking, emptyText: this.error ? '' : this.chapterTitle ? '暂无可用课次' : '当天暂无课程', onEnter: (c: Course) => { this.onEnter(c); } })

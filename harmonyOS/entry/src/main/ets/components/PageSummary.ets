@@ -240,9 +240,9 @@ export struct PageSummary {
   @Builder
   private summaryTools() {
       Scroll() { Row({ space: 6 }) {
-        if (this.answer() && (!this.live || this.currentId !== this.slides[this.slides.length - 1]?.id)) { Button('重新生成').height(30).fontSize(11).fontColor('#168BEE').backgroundColor('#EAF4FF').enabled(!this.running).onClick(() => this.requestCurrent()) }
-        Button(this.allPages ? '✓ 所有页面速览' : '所有页面速览').height(30).fontSize(11).fontColor('#168BEE').backgroundColor(this.allPages ? '#DDEEFF' : '#EAF4FF').onClick(() => { this.allPages = !this.allPages; if (!this.allPages && this.workingId !== this.currentId) this.cancel(); this.refresh(); })
-        Button() { DropdownLabel({ label: this.scope === 'page' ? '本页内容' : this.scope === 'before' ? '联系前文' : this.scope === 'course' ? '结合整门课之前的内容' : this.scope === 'courseAll' ? '结合整门课' : '整课脉络', labelSize: 11 }) }.padding(0).height(30).fontSize(11).fontColor('#168BEE').backgroundColor('#EAF4FF').bindMenu(this.scopeMenu())
+        if (this.answer() && (!this.live || this.currentId !== this.slides[this.slides.length - 1]?.id)) { Button('重新生成').height(30).fontSize(11).fontColor('#1F7BFF').backgroundColor('#E2F0FF').enabled(!this.running).onClick(() => this.requestCurrent()) }
+        Button(this.allPages ? '✓ 所有页面速览' : '所有页面速览').height(30).fontSize(11).fontColor('#1F7BFF').backgroundColor(this.allPages ? '#DDEEFF' : '#E2F0FF').onClick(() => { this.allPages = !this.allPages; if (!this.allPages && this.workingId !== this.currentId) this.cancel(); this.refresh(); })
+        Button() { DropdownLabel({ label: this.scope === 'page' ? '本页内容' : this.scope === 'before' ? '联系前文' : this.scope === 'course' ? '结合整门课之前的内容' : this.scope === 'courseAll' ? '结合整门课' : '整课脉络', labelSize: 11 }) }.padding(0).height(30).fontSize(11).fontColor('#1F7BFF').backgroundColor('#E2F0FF').bindMenu(this.scopeMenu())
       } }.height(32).layoutWeight(1).align(Alignment.End).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
   }
   build() {
@@ -256,7 +256,7 @@ export struct PageSummary {
         else { Blank().layoutWeight(1) }
       } else {
       Text('第 ' + (this.slides.findIndex((s: Slide) => s.id === this.currentId) + 1) + ' 页 · ' + stamp(this.slides.find((s: Slide) => s.id === this.currentId)?.t || 0)).fontSize(12).fontColor('#889AAF').width('100%')
-      if (this.live && this.currentId === this.slides[this.slides.length - 1]?.id) { Button('以本页现有转写与课件生成回答').fontSize(12).height(36).width('100%').fontColor('#168BEE').backgroundColor('#EAF4FF').enabled(this.workingId !== this.currentId).onClick(() => this.requestCurrent()) }
+      if (this.live && this.currentId === this.slides[this.slides.length - 1]?.id) { Button('以本页现有转写与课件生成回答').fontSize(12).height(36).width('100%').fontColor('#1F7BFF').backgroundColor('#E2F0FF').enabled(this.workingId !== this.currentId).onClick(() => this.requestCurrent()) }
       Stack({ alignContent: Alignment.Bottom }) {
       Scroll(this.scroller) {
         Column() {
@@ -265,8 +265,8 @@ export struct PageSummary {
       }.onScroll(() => this.readingScrolled()).height('100%').width('100%').align(Alignment.TopStart).scrollable(ScrollDirection.Vertical).enableScrollInteraction(!this.draggingText)
       if (this.returnVisible) { ReturnAction({ owner: 'summary', onReturn: this.onReturn }).zIndex(2) }
       }.layoutWeight(1).width('100%')
-      if (this.crossScope() && this.priorNotice) { Text(this.priorNotice).fontSize(11).fontColor('#71839A').width('100%') }
-      if (this.status) { Text(this.status).fontSize(12).fontColor('#71839A').width('100%') }
+      if (this.crossScope() && this.priorNotice) { Text(this.priorNotice).fontSize(11).fontColor('#566A85').width('100%') }
+      if (this.status) { Text(this.status).fontSize(12).fontColor('#566A85').width('100%') }
       if (!this.status && !this.answer()) { Text(this.live && this.currentId === this.slides[this.slides.length - 1]?.id ? '这一页讲解结束后自动生成，也可现在生成' : '等待这一页课程内容').fontSize(13).fontColor('#889AAF') }
       }
     }.onTouch((event: TouchEvent) => { if (event.type === TouchType.Down) this.fingerDownAt = Date.now(); else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.fingerDownAt = 0; }).onAxisEvent((event: AxisEvent) => { if (this.draggingText) return; const direction = this.axisPaging.move(event.getHorizontalAxisValue(), event.getVerticalAxisValue(), event.action); if (direction && !this.selectingText && Date.now() >= this.selectingUntil) this.onTurn(direction); }).onGestureJudgeBegin((info: GestureInfo, event: BaseGestureEvent) => (this.draggingText || (pointerSelection(event.source, event.sourceTool) || this.selectingText || Date.now() < this.selectingUntil || this.fingerDownAt > 0 && Date.now() - this.fingerDownAt > 300) && !info.isSystemGesture) && info.type === GestureControl.GestureType.PAN_GESTURE ? GestureJudgeResult.REJECT : GestureJudgeResult.CONTINUE).parallelGesture(PanGesture({ direction: PanDirection.Horizontal, distance: 24 }).onActionEnd((event: GestureEvent) => { if (!this.selectingText && Date.now() >= this.selectingUntil && Math.abs(event.offsetX) > 50 && Math.abs(event.offsetX) > Math.abs(event.offsetY) * 1.5) this.onTurn(event.offsetX > 0 ? -1 : 1); })).padding(12).width('100%').height('100%').backgroundColor(STUDY_SURFACE).borderRadius(STUDY_RADIUS)

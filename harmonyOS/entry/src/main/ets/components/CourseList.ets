@@ -8,6 +8,8 @@ export struct CourseList {
   collections: CourseCollections = new CourseCollections();
   @Prop collectionRevision: number = 0;
   @Prop separateUpcoming: boolean = false;
+  @Prop chronological: boolean = false;
+  @Prop descending: boolean = false;
   @Prop courses: Course[] = [];
   @Prop permissions: Record<string, string> = {};
   @Prop now: number = Date.now() / 1000;
@@ -16,6 +18,7 @@ export struct CourseList {
   onVisible: (course: Course, visible: boolean) => void = () => {};
   onEnter: (course: Course) => void = () => {};
   private inSection(state: string): Course[] {
+    if (state === 'all') return this.courses.slice().sort((a: Course, b: Course) => this.descending ? b.start - a.start : a.start - b.start);
     const rows = this.courses.filter((c: Course) => (state === 'upcoming' ? notStarted(c, this.now) : (!this.separateUpcoming || !notStarted(c, this.now)) && (this.permissions[c.subId] || 'unknown') === state)); return this.separateUpcoming ? rows.sort((a: Course, b: Course) => state === 'upcoming' ? a.start - b.start : b.start - a.start) : rows;
   }
   private sectionTitle(state: string): string {
@@ -30,33 +33,36 @@ export struct CourseList {
   }
   build() {
     List({ space: 10 }) {
-      ForEach(this.separateUpcoming ? ['allowed', 'denied', 'unknown', 'upcoming'] : ['allowed', 'denied', 'unknown'], (state: string) => {
+      ForEach(this.chronological ? ['all'] : this.separateUpcoming ? ['allowed', 'denied', 'unknown', 'upcoming'] : ['allowed', 'denied', 'unknown'], (state: string) => {
         if (this.inSection(state).length) {
-          ListItem() {
+          if (state !== 'all') { ListItem() {
             Text(`${this.sectionTitle(state)} · ${this.inSection(state).length}`).fontSize(14).fontWeight(FontWeight.Medium)
-              .fontColor(state === 'allowed' ? '#168BEE' : '#7C899A').width('100%').padding({ top: 10, bottom: 3, left: 4 })
-          }
-          ForEach(this.inSection(state), (c: Course) => {
+              .fontColor(state === 'allowed' ? '#1F7BFF' : '#566A85').width('100%').padding({ top: 10, bottom: 3, left: 4 })
+          } }
+          ForEach(this.inSection(state), (c: Course, index: number) => {
             ListItem() {
+              Column({ space: 12 }) {
+                if (this.chronological && (index === 0 || shanghaiDate(this.inSection(state)[index - 1].start) !== shanghaiDate(c.start))) { Text(shanghaiDate(c.start)).fontSize(16).fontWeight(FontWeight.Medium).fontColor('#0F2340').padding({ left: 4, top: 12 }).width('100%') }
               Row({ space: 12 }) {
                 Column({ space: 8 }) {
-                  Text(c.title).fontSize(18).fontWeight(FontWeight.Medium).fontColor('#20344D').maxLines(2)
-                  Text(`${shanghaiDate(c.start)}  ${clockTime(c.start)}–${clockTime(c.end)}`).fontSize(12).fontColor('#7C899A')
-                  Text(`${c.teacher}  ${c.room}`).fontSize(12).fontColor('#7C899A')
+                  Text(c.title).fontSize(18).fontWeight(FontWeight.Medium).fontColor('#0F2340').maxLines(2)
+                  Text(`${shanghaiDate(c.start)}  ${clockTime(c.start)}–${clockTime(c.end)}`).fontSize(12).fontColor('#566A85')
+                  Text(`${c.teacher}  ${c.room}`).fontSize(12).fontColor('#566A85')
                 }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                 Row({ space: 4 }) {
                 CollectionActions({ collections: this.collections, revision: this.collectionRevision, course: c, lesson: true })
                 Button(this.buttonTitle(c, this.permissions[c.subId] || 'unknown')).height(38).fontSize(12)
-                  .backgroundColor(this.permissions[c.subId] === 'allowed' && c.status === '1' ? '#168BEE' : '#EAF4FF')
-                  .fontColor(this.permissions[c.subId] === 'allowed' && c.status === '1' ? '#FFFFFF' : '#168BEE')
+                  .backgroundColor(this.permissions[c.subId] === 'allowed' && c.status === '1' ? '#1F7BFF' : '#E2F0FF')
+                  .fontColor(this.permissions[c.subId] === 'allowed' && c.status === '1' ? '#FFFFFF' : '#1F7BFF')
                   .enabled(this.permissions[c.subId] === 'allowed' && (c.status === '1' || phase(c, this.now) !== 'later')).onClick((event: ClickEvent) => { this.onEnter(c); })
                 }.alignItems(VerticalAlign.Center)
-              }.width('100%').padding(20).backgroundColor('#FFFFFF').borderRadius(14).onClick(() => { if (this.permissions[c.subId] === 'allowed' && (c.status === '1' || phase(c, this.now) !== 'later')) this.onEnter(c); })
+              }.width('100%').padding(20).backgroundColor('#FFFFFF').borderRadius(16).border({ width: 1, color: '#D6E5F5' }).onClick(() => { if (this.permissions[c.subId] === 'allowed' && (c.status === '1' || phase(c, this.now) !== 'later')) this.onEnter(c); })
+              }.width('100%').alignItems(HorizontalAlign.Start)
             }.onVisibleAreaChange([0.1], (visible: boolean) => this.onVisible(c, visible))
           }, (c: Course) => state + ':' + c.subId + ':' + c.status + ':' + phase(c, this.now))
         }
       }, (state: string) => state)
-      if (!this.courses.length && !this.busy) { ListItem() { Text(this.emptyText).fontSize(14).fontColor('#7C899A').padding(24) } }
+      if (!this.courses.length && !this.busy) { ListItem() { Text(this.emptyText).fontSize(14).fontColor('#566A85').padding(24) } }
     }.layoutWeight(1).width('100%').padding({ right: 12, bottom: 20 }).scrollBar(BarState.Auto)
   }
 }

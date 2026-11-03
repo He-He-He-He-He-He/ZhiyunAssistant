@@ -82,10 +82,10 @@ export struct SlideOverview {
   build() {
     Column({ space: 10 }) {
       Row({ space: 8 }) {
-        Text(this.multiSelect ? '选择问答课件' : '课件概览').fontSize(16).layoutWeight(1).maxLines(1).fontWeight(FontWeight.Medium).fontColor('#20344D')
-        Scroll() { Row({ space: 6 }) { Button(this.mergeDuplicates ? '✓ 合并重复课件' : '合并重复课件').height(30).fontSize(11).backgroundColor(this.mergeDuplicates ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => this.onMerge()); Button((this.skipEmpty ? '✓ 跳过无转写' : '跳过无转写') + (this.skipModes ? ' ▾' : '')).height(30).fontSize(11).backgroundColor(this.skipEmpty ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => this.onSkip()) } }.constraintSize({ maxWidth: this.panelWidth > 600 ? 290 : 130 }).height(32).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
-        if (this.multiSelect) { Button(this.selectionMode ? '✓ 选择' : '选择').height(30).fontSize(12).backgroundColor(this.selectionMode ? '#DDEEFF' : '#EAF4FF').fontColor('#168BEE').onClick(() => { this.end(); this.selectionMode = !this.selectionMode; if (!this.selectionMode) this.onChoose([]); }) }
-        Button('完成').height(30).fontSize(12).backgroundColor('#168BEE').fontColor('#FFFFFF').onClick(() => this.onClose())
+        Text(this.multiSelect ? '选择问答课件' : '课件概览').fontSize(16).layoutWeight(1).maxLines(1).fontWeight(FontWeight.Medium).fontColor('#0F2340')
+        Scroll() { Row({ space: 6 }) { Button(this.mergeDuplicates ? '✓ 合并重复课件' : '合并重复课件').height(30).fontSize(11).backgroundColor(this.mergeDuplicates ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => this.onMerge()); Button((this.skipEmpty ? '✓ 跳过无转写' : '跳过无转写') + (this.skipModes ? ' ▾' : '')).height(30).fontSize(11).backgroundColor(this.skipEmpty ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => this.onSkip()) } }.constraintSize({ maxWidth: this.panelWidth > 600 ? 290 : 130 }).height(32).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
+        if (this.multiSelect) { Button(this.selectionMode ? '✓ 选择' : '选择').height(30).fontSize(12).backgroundColor(this.selectionMode ? '#DDEEFF' : '#E2F0FF').fontColor('#1F7BFF').onClick(() => { this.end(); this.selectionMode = !this.selectionMode; if (!this.selectionMode) this.onChoose([]); }) }
+        Button('完成').height(30).fontSize(12).backgroundColor('#1F7BFF').fontColor('#FFFFFF').onClick(() => this.onClose())
       }.width('100%')
       Row({ space: 12 }) {
       Grid(this.scroller) {
@@ -93,13 +93,13 @@ export struct SlideOverview {
           GridItem() {
             Column({ space: 4 }) {
               if (this.imageUris[group.slide.id]) { Image(this.imageUris[group.slide.id]).sourceSize({ width: 480, height: 270 }).draggable(false).width('100%').aspectRatio(16 / 9).objectFit(ImageFit.Contain) }
-              else { Column() { LoadingProgress().width(24).height(24).color('#168BEE') }.width('100%').aspectRatio(16 / 9).justifyContent(FlexAlign.Center) }
+              else { Column() { LoadingProgress().width(24).height(24).color('#1F7BFF') }.width('100%').aspectRatio(16 / 9).justifyContent(FlexAlign.Center) }
               Row() {
                 Text((this.multiSelect && this.chosenIds.includes(group.slide.id) ? '✓ ' : '') + String(this.slideIndexes.get(group.slide.id) || 1)).fontSize(11).fontColor('#425F7D')
                 Blank()
                 Text(stamp(group.slide.t)).fontSize(10).fontColor('#8A9CB0')
               }.width('100%').height(18).padding({ top: 4, left: 4, right: 4 })
-            }.width('100%').padding(6).backgroundColor('#FFFFFF').borderRadius(8).border({ width: (this.multiSelect ? this.chosenIds.includes(group.slide.id) : group.slide.id === this.selectedId) ? 2 : 1, color: (this.multiSelect ? this.chosenIds.includes(group.slide.id) : group.slide.id === this.selectedId) ? '#168BEE' : '#E6EDF5' })
+            }.width('100%').padding(6).backgroundColor('#FFFFFF').borderRadius(8).border({ width: (this.multiSelect ? this.chosenIds.includes(group.slide.id) : group.slide.id === this.selectedId) ? 2 : 1, color: (this.multiSelect ? this.chosenIds.includes(group.slide.id) : group.slide.id === this.selectedId) ? '#1F7BFF' : '#E6EDF5' })
               .id('overview-' + group.slide.id).onAreaChange((old: Area, area: Area) => this.itemBounds.set(group.slide.id, this.bounds(area)))
               .onTouch((event: TouchEvent) => { if (event.type === TouchType.Down && event.touches.length === 1) this.begin(group.slide.id); })
               .onMouse((event: MouseEvent) => { if (event.action === MouseAction.Press && event.button === MouseButton.Left) this.begin(group.slide.id); })

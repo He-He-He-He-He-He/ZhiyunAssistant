@@ -16,7 +16,7 @@ export struct CollectionActions {
     const selected = this.selected(kind, this.revision), id = this.course.courseId, subId = this.lesson ? (this.course as Course).subId : '';
     if (selected) {
       this.confirming = true;
-      try { const choice = await this.getUIContext().getPromptAction().showDialog({ title: kind === 'later' ? '取消稍后再看？' : '取消收藏？', message: this.lesson ? this.course.title : '取消当前选择的课次', buttons: [{ text: '保留', color: '#71839A' }, { text: '取消', color: '#168BEE' }] }); if (choice.index !== 1 || this.course.courseId !== id || this.lesson && (this.course as Course).subId !== subId || !this.selected(kind, this.revision)) return; }
+      try { const choice = await this.getUIContext().getPromptAction().showDialog({ title: kind === 'later' ? '取消稍后再看？' : '取消收藏？', message: this.lesson ? this.course.title : '取消当前选择的课次', buttons: [{ text: '保留', color: '#566A85' }, { text: '取消', color: '#1F7BFF' }] }); if (choice.index !== 1 || this.course.courseId !== id || this.lesson && (this.course as Course).subId !== subId || !this.selected(kind, this.revision)) return; }
       catch (_) { return; }
       finally { this.confirming = false; }
     }
@@ -25,7 +25,7 @@ export struct CollectionActions {
 
   build() {
     Row({ space: 2 }) {
-      Button() { Text(this.selected('favourite', this.revision) ? '★' : '☆').fontSize(24).fontColor('#168BEE').textAlign(TextAlign.Center) }.id((this.lesson ? 'lesson-' : 'course-') + 'favourite-' + (this.lesson ? (this.course as Course).subId : this.course.courseId)).width(34).height(34).padding(0).backgroundColor(Color.Transparent).accessibilityText(this.selected('favourite', this.revision) ? '取消收藏' : '收藏').onClick((event: ClickEvent) => { this.toggle('favourite'); })
+      Button() { Text(this.selected('favourite', this.revision) ? '★' : '☆').fontSize(24).fontColor('#1F7BFF').textAlign(TextAlign.Center) }.id((this.lesson ? 'lesson-' : 'course-') + 'favourite-' + (this.lesson ? (this.course as Course).subId : this.course.courseId)).width(34).height(34).padding(0).backgroundColor(Color.Transparent).accessibilityText(this.selected('favourite', this.revision) ? '取消收藏' : '收藏').onClick((event: ClickEvent) => { this.toggle('favourite'); })
       Button() { Image(this.selected('later', this.revision) ? $r('app.media.watch_later_filled') : $r('app.media.watch_later_outline')).width(22).height(22).draggable(false) }.id((this.lesson ? 'lesson-' : 'course-') + 'later-' + (this.lesson ? (this.course as Course).subId : this.course.courseId)).width(34).height(34).padding(0).backgroundColor(Color.Transparent).accessibilityText(this.selected('later', this.revision) ? '取消稍后再看' : '稍后再看').onClick((event: ClickEvent) => { this.toggle('later'); })
     }.height(34).width(70)
   }

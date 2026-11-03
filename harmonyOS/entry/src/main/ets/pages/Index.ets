@@ -371,6 +371,7 @@ struct Index {
   private refreshLibrary(progressOnly: boolean = false): void { if (progressOnly && !this.offlineOpen && !this.downloadsOpen) return; const entries = this.library?.list() || []; if (this.offlineEntries !== entries) this.offlineEntries = entries; this.downloadJobs = this.library?.tasks() || []; }
 
   onBackPress(): boolean {
+    if (this.appAssistantOpen) { this.appAssistantOpen = false; this.assistantEditing = false; return true; }
     if (this.jumpingDialogOpen) { this.jumpDialog.close(); this.pageDialog.close(); this.jumpingDialogOpen = false; return true; }
     if (this.privacyOpen) { this.privacyOpen = false; return true; }
     if (this.lessonDownloadOpen) { this.lessonDownloadOpen = false; return true; }
@@ -589,7 +590,7 @@ struct Index {
   private async toggleSkipEmpty(): Promise<void> {
     if (this.smartSkip) {
       const gen = this.generation, subId = this.course?.subId;
-      let picked: promptAction.ActionMenuSuccessResponse; try { picked = await this.getUIContext().getPromptAction().showActionMenu({ title: '跳过无转写页面 · 选择模式', buttons: [{ text: '关闭跳过', color: '#425F7D' }, { text: '仅跳过完全无转写的课件', color: '#168BEE' }, { text: '也跳过仅有杂音等无效转写的课件', color: '#168BEE' }] }); } catch (_) { return; }
+      let picked: promptAction.ActionMenuSuccessResponse; try { picked = await this.getUIContext().getPromptAction().showActionMenu({ title: '跳过无转写页面 · 选择模式', buttons: [{ text: '关闭跳过', color: '#425F7D' }, { text: '仅跳过完全无转写的课件', color: '#1F7BFF' }, { text: '也跳过仅有杂音等无效转写的课件', color: '#1F7BFF' }] }); } catch (_) { return; }
       if (gen !== this.generation || subId !== this.course?.subId || !this.smartSkip) return;
       this.skipEmpty = picked.index > 0; this.skipSparse = picked.index === 2; this.store?.saveJson('smart-skip-sparse.txt', String(this.skipSparse));
     } else this.skipEmpty = !this.skipEmpty;
@@ -613,7 +614,7 @@ struct Index {
     if (!this.smartSkip && !await AiClient.savedKey()) { this.getUIContext().getPromptAction().showToast({ message: '请先在课程问答中设置 API 密钥', duration: 2200 }); return; }
     const gen = this.generation;
     if (!this.smartSkip) {
-      try { const picked = await this.getUIContext().getPromptAction().showDialog({ title: '开启跳过无效内容？', message: '此功能会逐页分析转写和课件，长课次可能消耗较多 Token，并产生 API 费用。已有识别缓存会复用；不确定的内容保留。本功能默认关闭。', buttons: [{ text: '取消', color: '#71839A' }, { text: '开启', color: '#168BEE' }] }); if (picked.index !== 1 || gen !== this.generation || this.screen !== 'lesson') return; } catch (_) { return; }
+      try { const picked = await this.getUIContext().getPromptAction().showDialog({ title: '开启跳过无效内容？', message: '此功能会逐页分析转写和课件，长课次可能消耗较多 Token，并产生 API 费用。已有识别缓存会复用；不确定的内容保留。本功能默认关闭。', buttons: [{ text: '取消', color: '#566A85' }, { text: '开启', color: '#1F7BFF' }] }); if (picked.index !== 1 || gen !== this.generation || this.screen !== 'lesson') return; } catch (_) { return; }
     }
     this.smartSkip = !this.smartSkip; this.store?.saveJson('smart-skip-enabled.txt', 'false');
     this.smartFilter.cancel(); this.skipModePrompted = false; this.skipNoMatchPending = false; this.skipProgress = { completed: 0, total: 0, failed: 0, running: false }; this.skipRanges = []; this.smartRangesKey = ''; this.skipStatus = ''; this.lastAutomaticRange = ''; this.skipPreparing = this.smartSkip && !this.historyReady && !this.demo && !this.offlineViewing; this.rebuildGroups(); if (this.skipPreparing) this.resume();
@@ -983,19 +984,19 @@ struct Index {
   @Builder
   private customizeSettings() {
     Column({ space: 14 }) {
-      Row() { Text('常用功能').fontSize(20).fontWeight(FontWeight.Medium).fontColor('#20344D').layoutWeight(1); Button('完成').height(32).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.settingsCustomizeOpen = false) }.width('100%')
-      Text('拖动右侧横条调整已选功能的顺序').fontSize(13).fontColor('#71839A').width('100%')
+      Row() { Text('常用功能').fontSize(20).fontWeight(FontWeight.Medium).fontColor('#0F2340').layoutWeight(1); Button('完成').height(32).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.settingsCustomizeOpen = false) }.width('100%')
+      Text('拖动右侧横条调整已选功能的顺序').fontSize(13).fontColor('#566A85').width('100%')
       Scroll() { Column({ space: 8 }) { ForEach(this.pinnedSettings.concat(this.featureIds.filter((id: string) => !this.pinnedSettings.includes(id))), (id: string) => {
         Row({ space: 8 }) {
           Checkbox().select(this.pinnedSettings.includes(id)).onChange((checked: boolean) => { if (checked !== this.pinnedSettings.includes(id)) this.togglePin(id); })
-          Text(this.featureName(id)).fontSize(15).fontColor('#20344D').layoutWeight(1).maxLines(1)
+          Text(this.featureName(id)).fontSize(15).fontColor('#0F2340').layoutWeight(1).maxLines(1)
           if (this.pinnedSettings.includes(id)) {
             Text('≡').id('pin-drag-' + id).fontSize(24).fontColor('#889AAF').width(36).height(44).textAlign(TextAlign.Center)
               .priorityGesture(PanGesture({ direction: PanDirection.Vertical, distance: 4 }).onActionStart(() => this.beginPinDrag(id)).onActionUpdate((event: GestureEvent) => this.updatePinDrag(event.offsetY)).onActionEnd(() => this.endPinDrag()).onActionCancel(() => { this.pinDragId = ''; this.pinDragTarget = -1; this.pinDragOffset = 0; }))
           }
         }.width('100%').height(68).padding(12).backgroundColor('#FFFFFF').borderRadius(12).clip(true).translate({ y: this.pinOffsetFor(id) }).zIndex(this.pinDragId === id ? 2 : 0).shadow({ radius: this.pinDragId === id ? 14 : 0, color: '#26394D26', offsetY: 4 }).animation({ duration: this.pinDragId === id && !this.pinDropping ? 0 : this.pinDragId ? 120 : 0, curve: Curve.EaseOut })
       }, (id: string) => id) }.width('100%').padding({ left: 8, right: 24, top: 8, bottom: 8 }) }.layoutWeight(1).width('100%').scrollable(ScrollDirection.Vertical).onScrollFrameBegin((offset: number, state: ScrollState): OnScrollFrameBeginHandlerResult => { return { offsetRemain: this.pinDragId ? 0 : offset }; })
-    }.padding({ top: this.safeTop + 16, bottom: this.safeBottom + 16, left: this.safeLeft + 16, right: this.safeRight + 16 }).width('100%').height('100%').backgroundColor('#F1F3F5')
+    }.padding({ top: this.safeTop + 16, bottom: this.safeBottom + 16, left: this.safeLeft + 16, right: this.safeRight + 16 }).width('100%').height('100%').backgroundColor('#EEF6FF')
   }
   @State returnOwner: string = '';
   private returnKind: string = '';
@@ -1203,7 +1204,7 @@ struct Index {
       if (matches.length !== 1 || !['favorite', 'later'].includes(parts[1]) || !['on', 'off'].includes(parts[2])) throw new Error('收藏参数无效');
       const course = matches[0], kind = parts[1] === 'later' ? 'later' : 'favourite', target = parts[2] === 'on', selected = this.collections.hasLesson(kind, course), epoch = this.assistantActionEpoch, owner = this.account.id;
       if (selected !== target) {
-        if (selected) { const choice = await this.getUIContext().getPromptAction().showDialog({ title: kind === 'later' ? '取消稍后再看？' : '取消收藏？', message: course.title, buttons: [{ text: '保留', color: '#71839A' }, { text: '取消', color: '#168BEE' }] }); if (choice.index !== 1) return '{"status":"已取消操作"}'; }
+        if (selected) { const choice = await this.getUIContext().getPromptAction().showDialog({ title: kind === 'later' ? '取消稍后再看？' : '取消收藏？', message: course.title, buttons: [{ text: '保留', color: '#566A85' }, { text: '取消', color: '#1F7BFF' }] }); if (choice.index !== 1) return '{"status":"已取消操作"}'; }
         if (epoch !== this.assistantActionEpoch || this.account?.id !== owner || this.collections.hasLesson(kind, course) !== selected) throw new Error('任务已停止或状态已改变');
         this.collections.toggleLesson(kind, course);
       }
@@ -1300,7 +1301,7 @@ struct Index {
     if (reference.courseId !== this.course?.subId) { this.message = '这条笔记引用属于其他课次'; return; }
     if (this.store && this.course) {
       const valid = reference.kind === 'question' ? !!new ChatStore(this.store).list().find((session) => session.id === reference.sessionId)?.turns[reference.turn || 0] : reference.pageId ? reference.summaryId ? !!new SummaryCache(this.store, this.course).record(reference.scope || 'page', reference.pageId, reference.summaryId) : !!new SummaryCache(this.store, this.course).latest(reference.scope || 'page')[reference.pageId] : false;
-      if (!valid) { this.getUIContext().getPromptAction().showDialog({ title: '相关缓存已被清理', message: '笔记中保存的引用内容仍可查看。', buttons: [{ text: '知道了', color: '#168BEE' }] }).catch(() => {}); return; }
+      if (!valid) { this.getUIContext().getPromptAction().showDialog({ title: '相关缓存已被清理', message: '笔记中保存的引用内容仍可查看。', buttons: [{ text: '知道了', color: '#1F7BFF' }] }).catch(() => {}); return; }
     }
     this.rememberJump('notes'); this.rewind(reference.at); this.noteContentReference = reference; this.noteReferenceSequence++;
     if (reference.kind === 'question') { this.aiCreated = true; this.aiOpen = true; } else { this.summaryCreated = true; this.summaryOpen = true; const page = this.groups.find((group: PageGroup) => group.slide.id === reference.pageId)?.slide; if (page) { const index = this.groups.findIndex((group: PageGroup) => group.slide.id === page.id); this.selected = index; this.prepareImages(this.generation); } }
@@ -1350,31 +1351,27 @@ struct Index {
   private topBar() {
     Row({ space: this.windowWidth < 600 ? 6 : 10 }) {
       Image($r('app.media.app_icon')).width(this.windowWidth < 600 ? 28 : 34).height(this.windowWidth < 600 ? 28 : 34).borderRadius(8)
-      Text('智云助手').fontSize(this.windowWidth < 600 ? 17 : 22).fontWeight(FontWeight.Bold).fontColor('#168BEE')
+      Text('智云助手').fontSize(this.windowWidth < 600 ? 17 : 22).fontWeight(FontWeight.Bold).fontColor('#0F2340')
       if (this.screen === 'lesson' || this.screen === 'waiting') {
-        Button('我的课堂').padding({ left: 8, right: 8 }).fontSize(12).height(30).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.showMyCourses())
+        Button('我的课堂').padding({ left: 8, right: 8 }).fontSize(12).height(30).backgroundColor(Color.Transparent).fontColor('#1F7BFF').onClick(() => this.showMyCourses())
         if (this.windowWidth >= 700) { Text(this.course?.title || '').fontSize(15).fontWeight(FontWeight.Medium).fontColor('#425F7D').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: this.windowWidth * 0.18 }) }
         Scroll() { Row({ space: 6 }) { ForEach(this.pinnedSettings.filter((id: string) => this.featureVisible(id)), (id: string) => {
-          Button((this.featureChecked(id) ? '✓ ' : '') + this.featureName(id)).fontSize(12).height(30).fontColor('#168BEE').backgroundColor(this.featureChecked(id) ? '#DDEEFF' : Color.Transparent).onClick(() => this.featureAction(id))
+          Button((this.featureChecked(id) ? '✓ ' : '') + this.featureName(id)).fontSize(12).height(30).fontColor('#1F7BFF').backgroundColor(this.featureChecked(id) ? '#DDEEFF' : Color.Transparent).onClick(() => this.featureAction(id))
         }, (id: string) => id)
           if (this.windowWidth < 600 && this.course) { CollectionActions({ collections: this.collections, revision: this.collectionRevision, course: this.course, lesson: true }) }
         } }.layoutWeight(1).height(36).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off)
         if (this.windowWidth >= 600 && this.course) { CollectionActions({ collections: this.collections, revision: this.collectionRevision, course: this.course, lesson: true }) }
-        Button('设置').padding({ left: 8, right: 8 }).fontSize(12).height(30).backgroundColor(Color.Transparent).fontColor('#168BEE').bindMenu(this.settingsMenu)
-        Button('返回').padding({ left: 8, right: 8 }).fontSize(12).height(30).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.onBackPress())
+        Button('助手').fontSize(12).height(30).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.appAssistantOpen = !this.appAssistantOpen)
+        Button('设置').padding({ left: 8, right: 8 }).fontSize(12).height(30).backgroundColor(Color.Transparent).fontColor('#1F7BFF').bindMenu(this.settingsMenu)
+        Button('返回').padding({ left: 8, right: 8 }).fontSize(12).height(30).backgroundColor(Color.Transparent).fontColor('#1F7BFF').onClick(() => this.onBackPress())
       } else {
         Scroll() { Row({ space: 4 }) {
           if (this.account) {
-            Text(this.account.name).fontSize(13).fontColor('#71839A').maxLines(1).constraintSize({ maxWidth: 120 })
-            Button('我的课堂').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.showMyCourses())
-            Button('课程收藏').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.openHomePage('favourite'))
-            Button('稍后再看').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.openHomePage('later'))
-            Button('笔记管理').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.openHomePage('notes'))
-            Button('离线课程').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.openHomePage('offline'))
-            Button('缓存设置').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.openHomePage('cache'))
-            Button('隐私').fontSize(12).height(32).fontColor('#168BEE').backgroundColor(Color.Transparent).onClick(() => this.privacyOpen = true)
-            Button('退出登录').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#168BEE').onClick(() => this.logout())
-          } else { Button('隐私').fontSize(12).height(32).fontColor('#168BEE').backgroundColor(Color.Transparent).onClick(() => this.privacyOpen = true) }
+            Button('应用助手').fontSize(12).height(32).backgroundColor(this.appAssistantOpen ? '#E2F0FF' : Color.Transparent).fontColor('#1F7BFF').onClick(() => this.appAssistantOpen = !this.appAssistantOpen)
+            Text(this.account.name).fontSize(13).fontColor('#566A85').maxLines(1).constraintSize({ maxWidth: 120 })
+            Button('隐私').fontSize(12).height(32).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.privacyOpen = true)
+            Button('退出登录').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#1F7BFF').onClick(() => this.logout())
+          } else { Button('隐私').fontSize(12).height(32).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.privacyOpen = true) }
         } }.layoutWeight(1).height(38).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).align(Alignment.End)
       }
     }.width('100%').height(56).padding({ left: 12, right: 12 })
@@ -1382,33 +1379,48 @@ struct Index {
   @Builder
   private welcome() {
     Column({ space: 22 }) {
-      Button('登录智云课堂').height(48).fontSize(16).backgroundColor('#168BEE').fontColor('#FFFFFF').padding({ left: 30, right: 30 })
+      Button('登录智云课堂').height(48).fontSize(16).backgroundColor('#1F7BFF').fontColor('#FFFFFF').padding({ left: 30, right: 30 })
         .onClick(() => { this.beginLogin(); })
-      if (this.account && (this.offlineEntries.length || this.downloadJobs.length)) { Button('离线课程').height(36).fontSize(13).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.openHomePage('offline')) }
+      if (this.account && (this.offlineEntries.length || this.downloadJobs.length)) { Button('离线课程').height(36).fontSize(13).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.openHomePage('offline')) }
     }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center).padding(28)
+  }
+  private homeNavLabel(id: string): string { return id === '' ? '我的课堂' : id === 'favourite' ? '课程收藏' : id === 'later' ? '稍后再看' : id === 'offline' ? '离线课程' : id === 'notes' ? '笔记管理' : id === 'cache' ? '缓存设置' : '课程广场'; }
+  private homeNavSelected(id: string): boolean { return id === 'plaza' ? this.plaza : id === 'favourite' || id === 'later' ? this.collectionPage === id : id === 'notes' ? this.notesLibrary : id === 'offline' ? this.offlineOpen : id === 'cache' ? this.cacheSettings : !this.plaza && !this.collectionPage && !this.notesLibrary && !this.offlineOpen && !this.cacheSettings; }
+  private homeNavAction(id: string): void { if (id === '') this.showMyCourses(); else if (id === 'plaza') { this.openHomePage(''); this.plaza = true; } else this.openHomePage(id); }
+  private homeNavIcon(id: string): Resource { if (id === 'favourite') return $r('app.media.nav_favorite'); if (id === 'later') return $r('app.media.nav_later'); if (id === 'offline') return $r('app.media.nav_offline'); if (id === 'notes') return $r('app.media.nav_notes'); if (id === 'cache') return $r('app.media.nav_cache'); if (id === 'plaza') return $r('app.media.nav_plaza'); return $r('app.media.nav_home'); }
+  @Builder
+  private homeNavItem(id: string) {
+    Button() { Row({ space: 10 }) { Image(this.homeNavIcon(id)).width(18).height(18); Text(this.homeNavLabel(id)).fontSize(14).fontColor(this.homeNavSelected(id) ? '#1F7BFF' : '#566A85').fontWeight(this.homeNavSelected(id) ? FontWeight.Medium : FontWeight.Regular) }.justifyContent(FlexAlign.Start).padding({ left: 12, right: 12 }) }.height(42).width(this.windowWidth >= 840 ? '100%' : 130).borderRadius(10).backgroundColor(this.homeNavSelected(id) ? '#E2F0FF' : Color.Transparent).onClick(() => this.homeNavAction(id))
+  }
+  @Builder
+  private homeNavigation() {
+    if (this.windowWidth >= 840) { Column({ space: 6 }) { ForEach(['', 'favourite', 'later', 'offline', 'notes', 'cache', 'plaza'], (id: string) => { this.homeNavItem(id) }, (id: string) => id) }.width(184).height('100%').padding({ left: 12, right: 12, top: 18 }).backgroundColor('#F6FAFF') }
+    else { Scroll() { Row({ space: 4 }) { ForEach(['', 'favourite', 'later', 'offline', 'notes', 'cache', 'plaza'], (id: string) => { this.homeNavItem(id) }, (id: string) => id) } }.width('100%').height(52).scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off) }
   }
   @Builder
   private catalog() {
-    Column({ space: 12 }) {
-      Row() {
-        Column({ space: 8 }) {
-          Text('我的课堂').fontSize(this.windowWidth < 500 ? 26 : 34).fontWeight(FontWeight.Bold).fontColor('#20344D')
-          Text(shanghaiDate(this.now)).fontSize(13).fontColor('#7C899A')
-        }.alignItems(HorizontalAlign.Start)
-        if (this.windowWidth >= 800) { Image($r('app.media.sky_hero')).width(105).height(65).objectFit(ImageFit.Contain).margin({ left: 24 }) }
-        Blank()
-        Button('批量下载').height(32).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').margin({ right: 8 }).onClick(() => this.openDownload(this.visibleCourses().filter((c: Course) => this.coursePermissions[c.subId] === 'allowed')))
-        Button('刷新').height(32).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => { this.catalogAt = 0; this.forcePermissionRefresh = true; this.resume(); })
-      }.width('100%').padding({ left: 20, right: 20, top: 18, bottom: 18 }).backgroundColor('#DCEEFF').borderRadius(20)
+    Column({ space: 16 }) {
       Row({ space: 8 }) {
-        Button('今日课表').height(34).fontSize(13).fontColor(this.recent ? '#71839A' : '#FFFFFF').backgroundColor(this.recent ? '#EAF0F8' : '#168BEE').onClick(() => this.showMyCourses('today'))
-        Button('近两周').height(34).fontSize(13).fontColor(this.recent ? '#FFFFFF' : '#71839A').backgroundColor(this.recent ? '#168BEE' : '#EAF0F8').onClick(() => this.showMyCourses('recent'))
-        Button('所有课程').height(34).fontSize(13).fontColor('#71839A').backgroundColor('#EAF0F8').onClick(() => this.showMyCourses('all'))
+        Text('我的课堂').fontSize(this.windowWidth < 600 ? 22 : 28).fontWeight(FontWeight.Bold).fontColor('#0F2340')
         Blank()
-        Button('课程广场').height(34).fontSize(13).fontColor('#168BEE').backgroundColor(Color.Transparent).fontSize(12).onClick(() => { this.message = ''; this.plaza = true; })
-      }.width('100%').padding({ left: 16, right: 16, top: 14, bottom: 14 }).backgroundColor('#DCEEFF').borderRadius(18)
-      CourseList({ collections: this.collections, collectionRevision: this.collectionRevision, courses: this.visibleCourses(), permissions: this.coursePermissions, now: this.now, busy: this.busy, onEnter: (c: Course) => { this.enter(c); } })
-    }.layoutWeight(1).width('100%').padding({ left: this.windowWidth < 600 ? 20 : 40, right: this.windowWidth < 600 ? 20 : 40 })
+        Button('刷新').height(34).fontSize(12).fontColor('#566A85').backgroundColor('#FFFFFF').borderRadius(9).onClick(() => { this.catalogAt = 0; this.forcePermissionRefresh = true; this.resume(); })
+        Button('批量下载').height(34).fontSize(12).fontColor('#566A85').backgroundColor('#FFFFFF').borderRadius(9).onClick(() => this.openDownload(this.visibleCourses().filter((c: Course) => this.coursePermissions[c.subId] === 'allowed')))
+      }.width('100%').padding({ top: 16 })
+      Row({ space: 18 }) {
+        Column({ space: 10 }) {
+          Text(shanghaiDate(this.now)).fontSize(12).fontColor('#566A85')
+          Text('让每一节课，都有所收获').fontSize(this.windowWidth < 600 ? 20 : 24).fontWeight(FontWeight.Bold).fontColor('#0F2340')
+          Text((this.recent ? '近两周' : '今日') + '共 ' + this.visibleCourses().length + ' 节课程').fontSize(13).fontColor('#566A85')
+          Row({ space: 6 }) {
+            Button('今日课表').height(34).fontSize(12).fontColor(this.recent ? '#566A85' : '#1F7BFF').backgroundColor(this.recent ? '#EAF5FF' : '#FFFFFF').borderRadius(9).onClick(() => this.showMyCourses('today'))
+            Button('近两周').height(34).fontSize(12).fontColor(this.recent ? '#1F7BFF' : '#566A85').backgroundColor(this.recent ? '#FFFFFF' : '#EAF5FF').borderRadius(9).onClick(() => this.showMyCourses('recent'))
+            Button('所有课程').height(34).fontSize(12).fontColor('#566A85').backgroundColor('#EAF5FF').borderRadius(9).onClick(() => this.showMyCourses('all'))
+          }.padding({ top: 6 })
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+        if (this.windowWidth >= 760) { Image($r('app.media.sky_hero')).width(this.windowWidth >= 1000 ? 200 : 150).height(140).objectFit(ImageFit.Contain) }
+      }.width('100%').padding(22).linearGradient({ angle: 110, colors: [['#D9EDFF', 0], ['#BCDEFF', 0.6], ['#D7F0FF', 1]] }).borderRadius(20)
+      CourseList({ chronological: true, descending: this.recent, collections: this.collections, collectionRevision: this.collectionRevision, courses: this.visibleCourses(), permissions: this.coursePermissions, now: this.now, busy: this.busy, onEnter: (c: Course) => { this.enter(c); } })
+    }.layoutWeight(1).width('100%').padding({ left: this.windowWidth < 600 ? 14 : 24, right: this.windowWidth < 600 ? 14 : 24 })
   }
   private focusLogin(): void {
     if (this.screen === 'login' && !this.authOfficial && !this.authSubmitting) setTimeout(() => this.getUIContext().getFocusController().requestFocus(this.loginField), 30);
@@ -1500,21 +1512,21 @@ struct Index {
   private loginView() {
     Column() {
       Row() {
-        Button('返回').height(32).fontSize(12).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.onBackPress())
-        if (this.authOfficial) { Text('请完成学校登录验证').fontSize(12).fontColor('#7C899A').margin({ left: 12 }) }
+        Button('返回').height(32).fontSize(12).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.onBackPress())
+        if (this.authOfficial) { Text('请完成学校登录验证').fontSize(12).fontColor('#566A85').margin({ left: 12 }) }
       }.width('100%').padding(12)
       if (!this.authOfficial) {
         Column({ space: 18 }) {
           Image($r('app.media.app_icon')).width(64).height(64).borderRadius(16)
-          Text('登录智云课堂').fontSize(28).fontWeight(FontWeight.Bold).fontColor('#20344D')
+          Text('登录智云课堂').fontSize(28).fontWeight(FontWeight.Bold).fontColor('#0F2340')
           TextInput({ text: this.authUser, controller: this.loginAccountController, placeholder: '学号／职工号／邮箱' }).id('login-account').focusable(true).focusOnTouch(true).defaultFocus(true).onFocus(() => this.loginField = 'login-account').onBlur(() => this.loginAccountInput.reset()).onKeyPreIme((event: KeyEvent): boolean => this.loginKey(event, false)).enterKeyType(EnterKeyType.Next).onSubmit(() => { this.getUIContext().getFocusController().requestFocus('login-password'); }).height(48).backgroundColor('#FFFFFF').onChange((v: string) => this.authUser = v)
           TextInput({ text: this.authPassword, controller: this.loginPasswordController, placeholder: '统一身份认证密码' }).id('login-password').focusable(true).focusOnTouch(true).onFocus(() => this.loginField = 'login-password').onBlur(() => this.loginPasswordInput.reset()).onKeyPreIme((event: KeyEvent): boolean => this.loginKey(event, true)).enterKeyType(EnterKeyType.Done).type(InputType.Password).height(48).backgroundColor('#FFFFFF').onChange((v: string) => this.authPassword = v).onSubmit(() => this.submitLogin())
           if (this.authError) { Text(this.authError).fontSize(12).fontColor('#A15438').width('100%') }
-          Button('登录').height(46).width('100%').fontSize(16).backgroundColor('#168BEE').fontColor('#FFFFFF')
+          Button('登录').height(46).width('100%').fontSize(16).backgroundColor('#1F7BFF').fontColor('#FFFFFF')
             .enabled(!this.authSubmitting && !!this.authUser.trim() && !!this.authPassword).onClick(() => this.submitLogin())
-          if (this.authSubmitting) { Text('正在登录智云课堂，请稍等').fontSize(12).fontColor('#168BEE') }
+          if (this.authSubmitting) { Text('正在登录智云课堂，请稍等').fontSize(12).fontColor('#1F7BFF') }
           Text('使用浙江大学统一身份认证').fontSize(12).fontColor('#889AAF')
-          Button('其他登录方式').height(30).fontSize(12).fontColor('#168BEE').backgroundColor(Color.Transparent).onClick(() => { this.authOfficial = true; this.authSubmitting = false; this.authSubmitted = false; this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); })
+          Button('其他登录方式').height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => { this.authOfficial = true; this.authSubmitting = false; this.authSubmitted = false; this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); })
         }.width('90%').constraintSize({ maxWidth: 420 }).layoutWeight(1).justifyContent(FlexAlign.Center)
       }
     }.layoutWeight(this.authOfficial ? 0 : 1).width('100%')
@@ -1542,8 +1554,8 @@ struct Index {
   @Builder
   private waiting() {
     Column({ space: 18 }) {
-      Text(this.course?.title || '').fontSize(28).fontWeight(FontWeight.Bold).fontColor('#20344D').textAlign(TextAlign.Center)
-      Text(this.syncState || '正在连接课堂…').fontSize(16).fontColor('#71839A')
+      Text(this.course?.title || '').fontSize(28).fontWeight(FontWeight.Bold).fontColor('#0F2340').textAlign(TextAlign.Center)
+      Text(this.syncState || '正在连接课堂…').fontSize(16).fontColor('#566A85')
       if (this.course && this.now < this.course.start) { Text('上课后自动进入学习').fontSize(13).fontColor('#8A97A8') }
     }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center).padding(24)
   }
@@ -1551,7 +1563,7 @@ struct Index {
   private slideContent() {
     Column({ space: 8 }) {
       if (!this.slidesEnabled && !this.transcription && !this.showVideo) {
-        Column() { Text('请打开功能').fontSize(18).fontColor('#71839A') }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
+        Column() { Text('请打开功能').fontSize(18).fontColor('#566A85') }.layoutWeight(1).width('100%').justifyContent(FlexAlign.Center)
       } else if (!this.slidesEnabled && !this.transcription && this.showVideo) {
         Blank().layoutWeight(1).width('100%')
       } else if (!this.slidesEnabled && this.transcription && this.lines.length) {
@@ -1569,14 +1581,14 @@ struct Index {
       }
       if (this.slidesEnabled && this.groups.length) {
         Row({ space: 6 }) {
-          Button('‹').accessibilityText('上一组课件').width(36).height(30).fontColor('#168BEE').backgroundColor('#EAF4FF').enabled(this.selected > 0).onClick(() => this.turnPages(-1))
+          Button('‹').accessibilityText('上一组课件').width(36).height(30).fontColor('#1F7BFF').backgroundColor('#E2F0FF').enabled(this.selected > 0).onClick(() => this.turnPages(-1))
           Blank()
-          if (this.activePanes().length === 1) { Button() { DropdownLabel({ label: this.capacity + ' 页', labelSize: 11 }) }.padding(0).height(30).fontSize(11).fontColor('#168BEE').backgroundColor('#EAF4FF').bindMenu([1, 2, 3, 4].map((count: number): MenuElement => { return { value: '显示 ' + count + ' 张课件', action: () => { this.slideCount = count; this.resize(); this.prepareImages(this.generation); } }; })) }
-          Text(this.pageLabel()).fontSize(11).fontColor('#7C899A').onClick(() => this.pageDialog.open())
+          if (this.activePanes().length === 1) { Button() { DropdownLabel({ label: this.capacity + ' 页', labelSize: 11 }) }.padding(0).height(30).fontSize(11).fontColor('#1F7BFF').backgroundColor('#E2F0FF').bindMenu([1, 2, 3, 4].map((count: number): MenuElement => { return { value: '显示 ' + count + ' 张课件', action: () => { this.slideCount = count; this.resize(); this.prepareImages(this.generation); } }; })) }
+          Text(this.pageLabel()).fontSize(11).fontColor('#566A85').onClick(() => this.pageDialog.open())
           Blank()
-          if (Number(this.info?.sub_status) === 1) { Button('回到最新').id('slides-latest').height(30).fontSize(11).fontColor('#168BEE').backgroundColor('#EAF4FF').onClick(() => this.latestSlide()) }
+          if (Number(this.info?.sub_status) === 1) { Button('回到最新').id('slides-latest').height(30).fontSize(11).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.latestSlide()) }
           if (this.returnOwner === 'slides') { ReturnAction({ owner: 'slides', onReturn: () => this.undoStudy() }) }
-          Button('›').accessibilityText('下一组课件').width(36).height(30).fontColor('#168BEE').backgroundColor('#EAF4FF').enabled(this.selected + this.capacity < this.groups.length).onClick(() => this.turnPages(1))
+          Button('›').accessibilityText('下一组课件').width(36).height(30).fontColor('#1F7BFF').backgroundColor('#E2F0FF').enabled(this.selected + this.capacity < this.groups.length).onClick(() => this.turnPages(1))
         }.width('100%')
       }
     }.height('100%').width('100%')
@@ -1622,11 +1634,11 @@ struct Index {
           if (this.aiCreated) { PaneFrame({ onBackgroundFocus: () => { this.focusedEditors.clear(); this.inputFocused = false; }, rect: this.pane('ai'), canvasWidth: this.workspaceWidth, canvasHeight: this.canvasHeight(), controls: !this.videoFullscreen, selected: this.editingPane === 'ai', onSelect: () => this.editingPane = 'ai', onActivate: () => this.activatePane('ai'), adjustable: !this.videoFullscreen && !this.layoutLocked, onChange: (rect: PaneRect) => this.setPane(rect), content: () => { this.aiPane(); } }).width(this.paneWidth('ai')).height(this.paneHeight('ai')).position({ x: this.paneX('ai'), y: this.paneY('ai') }).zIndex(this.pane('ai').z).visibility(this.aiOpen && !this.videoFullscreen ? Visibility.Visible : Visibility.None) }
           if (this.notesCreated) { PaneFrame({ onBackgroundFocus: () => { this.focusedEditors.clear(); this.inputFocused = false; }, rect: this.pane('notes'), canvasWidth: this.workspaceWidth, canvasHeight: this.canvasHeight(), controls: !this.videoFullscreen, selected: this.editingPane === 'notes', onSelect: () => this.editingPane = 'notes', onActivate: () => this.activatePane('notes'), adjustable: !this.videoFullscreen && !this.layoutLocked, onChange: (rect: PaneRect) => this.setPane(rect), content: () => { this.notesPane(); } }).width(this.paneWidth('notes')).height(this.paneHeight('notes')).position({ x: this.paneX('notes'), y: this.paneY('notes') }).zIndex(this.pane('notes').z).visibility(this.notesOpen && !this.videoFullscreen ? Visibility.Visible : Visibility.None) }
           if (this.summaryCreated) { PaneFrame({ onBackgroundFocus: () => { this.focusedEditors.clear(); this.inputFocused = false; }, rect: this.pane('summary'), canvasWidth: this.workspaceWidth, canvasHeight: this.canvasHeight(), controls: !this.videoFullscreen, selected: this.editingPane === 'summary', onSelect: () => this.editingPane = 'summary', onActivate: () => this.activatePane('summary'), adjustable: !this.videoFullscreen && !this.layoutLocked, onChange: (rect: PaneRect) => this.setPane(rect), content: () => { this.summaryPane(); } }).width(this.paneWidth('summary')).height(this.paneHeight('summary')).position({ x: this.paneX('summary'), y: this.paneY('summary') }).zIndex(this.pane('summary').z).visibility(this.summaryOpen && !this.videoFullscreen ? Visibility.Visible : Visibility.None) }
-          if (!this.activePanes().length) { Text('请打开功能').fontSize(18).fontColor('#71839A').width('100%').height('100%').textAlign(TextAlign.Center) }
+          if (!this.activePanes().length) { Text('请打开功能').fontSize(18).fontColor('#566A85').width('100%').height('100%').textAlign(TextAlign.Center) }
         }.width('100%').height(this.canvasHeight()).clip(true)
       }.width('100%').height('100%').align(Alignment.TopStart).scrollable(this.videoFullscreen ? ScrollDirection.None : ScrollDirection.Vertical).enableScrollInteraction(!this.selectingPane).scrollBar(this.windowWidth < 600 && !this.videoFullscreen ? BarState.Auto : BarState.Off)
       if (this.smartSkip && (this.skipPreparing || this.skipProgress.running) && !this.videoFullscreen) {
-        Row({ space: 10 }) { Text(this.skipPreparing ? '正在准备课程资料' : '正在处理无效内容').fontSize(11).fontColor('#71839A'); Progress({ value: this.skipProgress.completed, total: Math.max(1, this.skipProgress.total), type: ProgressType.Linear }).id('smart-skip-progress').layoutWeight(1).color('#168BEE'); Text(this.skipPreparing ? '加载中' : this.skipProgress.completed + '/' + this.skipProgress.total).fontSize(11).fontColor('#71839A') }.height(30).width('100%').padding({ left: 16, right: 16 }).backgroundColor('#F4F7FBEF').hitTestBehavior(HitTestMode.None).zIndex(500)
+        Row({ space: 10 }) { Text(this.skipPreparing ? '正在准备课程资料' : '正在处理无效内容').fontSize(11).fontColor('#566A85'); Progress({ value: this.skipProgress.completed, total: Math.max(1, this.skipProgress.total), type: ProgressType.Linear }).id('smart-skip-progress').layoutWeight(1).color('#1F7BFF'); Text(this.skipPreparing ? '加载中' : this.skipProgress.completed + '/' + this.skipProgress.total).fontSize(11).fontColor('#566A85') }.height(30).width('100%').padding({ left: 16, right: 16 }).backgroundColor('#F4F7FBEF').hitTestBehavior(HitTestMode.None).zIndex(500)
       }
     }.layoutWeight(1).width('100%').onAreaChange((oldArea: Area, area: Area) => { const width = Number(area.width), height = Number(area.height); if (width !== this.workspaceWidth || height !== this.workspaceHeight) { this.workspaceWidth = width; this.workspaceHeight = height; this.resize(); } })
   }
@@ -1649,6 +1661,10 @@ struct Index {
           Button('登录').height(28).fontSize(11).backgroundColor('#EEE5D8').fontColor('#8C653D').onClick(() => { this.beginLogin(); })
         }.padding({ left: 16, right: 16, bottom: 10 }).width('100%')
       }
+      if (this.account && this.screen === 'home' && this.windowWidth < 840) { this.homeNavigation() }
+      Row() {
+        if (this.account && this.screen === 'home' && this.windowWidth >= 840) { this.homeNavigation() }
+        Column() {
       if (this.cacheSettings && this.screen === 'home') { CacheSettings({ backSequence: this.cacheBackSequence, store: this.store, onClose: () => this.openHomePage(''), onAssistantCleared: () => this.assistantClearRevision++ }).layoutWeight(1) }
       else if (this.notesLibrary && this.screen === 'home') { NotesLibrary({ onOpen: (note: LessonNote) => this.openManagedNote(note), account: this.account, backSequence: this.notesBackSequence, store: this.store, onClose: () => this.openHomePage('') }).layoutWeight(1) }
       else if (this.offlineOpen && this.screen === 'home') { OfflineScreen({ concurrency: this.library?.concurrency() || 1, onConcurrency: (count: number) => this.library?.setConcurrency(count), onPauseJob: (id: string) => this.library?.pauseJob(id), onResumeJob: (id: string) => this.library?.resumeJob(id), onMoveJob: (id: string, direction: number) => this.library?.moveJob(id, direction), collections: this.collections, collectionRevision: this.collectionRevision, entries: this.offlineEntries, jobs: this.downloadJobs, onDeleteMany: (ids: string[]) => this.library?.removeMany(ids).catch(() => this.getUIContext().getPromptAction().showToast({ message: '删除未完成，请重试', duration: 2000 })), onClose: () => this.openHomePage(''), onOpen: (entry: OfflineCourse) => this.openOffline(entry), onPause: () => this.library?.pause(), onResume: () => this.library?.resume(), onDelete: (entry: OfflineCourse) => this.library?.remove(entry.course.subId).catch(() => this.getUIContext().getPromptAction().showToast({ message: '删除未完成，请重试', duration: 2000 })), onSaveAvailable: (subId: string) => this.library?.saveAvailable(subId), onRetry: (job: DownloadJob) => this.library?.retryJob(job.course.subId), onDeleteJob: (subId: string) => this.library?.remove(subId).catch(() => this.getUIContext().getPromptAction().showToast({ message: '删除未完成，请重试', duration: 2000 })) }).layoutWeight(1) }
@@ -1668,27 +1684,29 @@ struct Index {
         Plaza({ collections: this.collections, collectionRevision: this.collectionRevision, refreshSequence: this.downloadScopeRefresh, onDiscovered: (courses: Course[], checking: boolean) => { if (this.downloadsOpen && this.downloadScoped) { this.downloadDiscovered = courses; this.downloadScopeChecking = checking; } }, account: this.account, store: this.store, active: this.foreground && this.screen === 'home' && !this.offlineOpen && !this.notesLibrary && !this.cacheSettings, backSequence: this.plazaBackSequence, onEnter: (c: Course) => { this.enter(c); }, onDownload: (courses: Course[]) => this.openDownload(courses, true), onBack: () => { this.plaza = false; this.catalogAt = 0; this.forcePermissionRefresh = true; this.resume(); } })
           .visibility(this.screen === 'home' && !this.offlineOpen && !this.notesLibrary && !this.cacheSettings ? Visibility.Visible : Visibility.None)
       }
+        }.layoutWeight(1).height('100%')
+      }.layoutWeight(1).width('100%')
     }.width('100%').height('100%').backgroundColor(this.videoFullscreen ? '#000000' : '#F2F8FF').padding(this.videoFullscreen ? 0 : { top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight })
       .onAreaChange((oldArea: Area, newArea: Area) => {
         const width = Number(newArea.width), height = Number(newArea.height); if (width !== this.windowWidth || height !== this.windowHeight) { this.windowWidth = width; this.windowHeight = height; if (!this.assistantRectInitialized && width > 0 && height > 100) { const w = Math.min(390, width - 24), h = Math.min(560, height - 100); this.assistantRect = { id: 'assistant', x: Math.max(0, (width - w - 12) / width), y: Math.max(0, (height - h - 18) / height), w: w / width, h: h / height, z: 0 }; this.assistantRectInitialized = true; } this.resize(); }
       })
       if (this.overview && this.screen === 'lesson' && this.slidesEnabled) {
-      SlideOverview({ skipModes: this.smartSkip, mergeDuplicates: this.mergeDuplicateSlides, onMerge: () => this.toggleDuplicateSlides(), groups: visiblePageGroups(this.groups, this.skipEmpty, Number(this.info?.sub_status) === 1), slides: this.presentationSlides(), imageUris: this.imageUris, skipEmpty: this.skipEmpty, selectedId: this.groups[this.selected]?.slide.id || '', onSkip: () => this.toggleSkipEmpty(), onClose: () => this.overview = false, onSelect: (slide: Slide) => { this.chooseSlide(slide); this.overview = false; }, onLoad: (slide: Slide) => this.queueImage(slide) }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#F1F3F5')
+      SlideOverview({ skipModes: this.smartSkip, mergeDuplicates: this.mergeDuplicateSlides, onMerge: () => this.toggleDuplicateSlides(), groups: visiblePageGroups(this.groups, this.skipEmpty, Number(this.info?.sub_status) === 1), slides: this.presentationSlides(), imageUris: this.imageUris, skipEmpty: this.skipEmpty, selectedId: this.groups[this.selected]?.slide.id || '', onSkip: () => this.toggleSkipEmpty(), onClose: () => this.overview = false, onSelect: (slide: Slide) => { this.chooseSlide(slide); this.overview = false; }, onLoad: (slide: Slide) => this.queueImage(slide) }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF')
     }
-    if (this.aiPagePicker) { SlideOverview({ skipModes: this.smartSkip, mergeDuplicates: this.mergeDuplicateSlides, onMerge: () => this.toggleDuplicateSlides(), onSkip: () => this.toggleSkipEmpty(), onChoose: (ids: string[]) => this.aiSelectedIds = ids, multiSelect: true, chosenIds: this.aiSelectedIds, groups: visiblePageGroups(this.groups, this.skipEmpty, Number(this.info?.sub_status) === 1), slides: this.presentationSlides(), imageUris: this.imageUris, skipEmpty: this.skipEmpty, onClose: () => this.aiPagePicker = false, onToggle: (id: string) => this.aiSelectedIds = this.aiSelectedIds.includes(id) ? this.aiSelectedIds.filter((s: string) => s !== id) : this.aiSelectedIds.concat([id]), onLoad: (slide: Slide) => this.queueImage(slide) }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#F1F3F5') }
+    if (this.aiPagePicker) { SlideOverview({ skipModes: this.smartSkip, mergeDuplicates: this.mergeDuplicateSlides, onMerge: () => this.toggleDuplicateSlides(), onSkip: () => this.toggleSkipEmpty(), onChoose: (ids: string[]) => this.aiSelectedIds = ids, multiSelect: true, chosenIds: this.aiSelectedIds, groups: visiblePageGroups(this.groups, this.skipEmpty, Number(this.info?.sub_status) === 1), slides: this.presentationSlides(), imageUris: this.imageUris, skipEmpty: this.skipEmpty, onClose: () => this.aiPagePicker = false, onToggle: (id: string) => this.aiSelectedIds = this.aiSelectedIds.includes(id) ? this.aiSelectedIds.filter((s: string) => s !== id) : this.aiSelectedIds.concat([id]), onLoad: (slide: Slide) => this.queueImage(slide) }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
     if (this.settingsCustomizeOpen) { this.customizeSettings() }
     if (this.slideFullscreen) { this.enlargedSlide() }
     if (this.layoutOpen) {
       LayoutPanel({ rects: this.paneRects, activeIds: this.activePanes(), locked: this.layoutLocked, onLock: () => { this.layoutLocked = !this.layoutLocked; this.editingPane = ''; }, onSelect: (id: string) => { this.activePane = id; }, onChange: (rect: PaneRect) => this.setPane(rect), onPreset: (preset: string) => this.layoutPreset(preset), onClose: () => this.layoutOpen = false, onSave: () => this.saveLayout(), onLayer: (id: string, action: string) => { if (!this.layoutLocked) this.paneRects = reorderPanes(this.paneRects, id, action); } }).width(this.windowWidth > 700 ? 520 : '94%').borderRadius(18).clip(true).shadow({ radius: 20, color: '#18314733' })
     }
-    if (this.privacyOpen) { PrivacyPage({ consentRequired: !this.privacyAccepted, onClose: () => this.privacyOpen = false, onAccept: () => { this.privacyAccepted = true; this.privacyOpen = false; this.restoreAccount(); }, onWithdraw: () => { new PrivacyService(this.getUIContext().getHostContext() as common.UIAbilityContext).withdraw(); this.logout(); this.privacyAccepted = false; this.privacyOpen = true; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#F1F3F5') }
+    if (this.privacyOpen) { PrivacyPage({ consentRequired: !this.privacyAccepted, onClose: () => this.privacyOpen = false, onAccept: () => { this.privacyAccepted = true; this.privacyOpen = false; this.restoreAccount(); }, onWithdraw: () => { new PrivacyService(this.getUIContext().getHostContext() as common.UIAbilityContext).withdraw(); this.logout(); this.privacyAccepted = false; this.privacyOpen = true; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
     if (this.lessonDownloadOpen) { LessonDownload({ course: this.course, onClose: () => this.lessonDownloadOpen = false, onDownload: (options: DownloadOptions) => { if (this.course) this.library?.enqueue([this.course], options); this.lessonDownloadOpen = false; this.getUIContext().getPromptAction().showToast({ message: '已添加本节课下载任务', duration: 2000 }); } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }) }
-    if (this.downloadsOpen) { DownloadSheet({ discoveries: this.downloadDiscovered, discovering: this.downloadScopeChecking, onRefreshScope: () => this.downloadScopeRefresh++, scoped: this.downloadScoped, backSequence: this.downloadBackSequence, fullPage: true, courses: this.downloadCourses, account: this.account, store: this.store, onClose: () => this.downloadsOpen = false, onDownload: (courses: Course[], options: DownloadOptions) => { this.library?.enqueue(courses, options); this.offlineOpen = this.screen === 'home'; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#F1F3F5') }
+    if (this.downloadsOpen) { DownloadSheet({ discoveries: this.downloadDiscovered, discovering: this.downloadScopeChecking, onRefreshScope: () => this.downloadScopeRefresh++, scoped: this.downloadScoped, backSequence: this.downloadBackSequence, fullPage: true, courses: this.downloadCourses, account: this.account, store: this.store, onClose: () => this.downloadsOpen = false, onDownload: (courses: Course[], options: DownloadOptions) => { this.library?.enqueue(courses, options); this.offlineOpen = this.screen === 'home'; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
     if (this.account && this.privacyAccepted && !this.videoFullscreen) {
       PaneFrame({ rect: this.assistantRect, canvasWidth: this.windowWidth, canvasHeight: this.windowHeight, controls: this.appAssistantOpen, adjustable: this.appAssistantOpen, selected: this.assistantEditing, backgroundFocus: false, transparentWhenClosed: true, onSelect: () => { this.assistantEditing = true; this.editingPane = ''; }, onChange: (rect: PaneRect) => { this.assistantRect = normalizePane(rect); }, content: () => { this.appAssistantContent(); } })
         .width(this.appAssistantOpen ? Math.max(1, this.assistantRect.w * this.windowWidth) : 120).height(this.appAssistantOpen ? Math.max(1, this.assistantRect.h * this.windowHeight) : 48)
-        .position({ x: this.appAssistantOpen ? this.assistantRect.x * this.windowWidth : Math.max(12, this.windowWidth - 132), y: this.appAssistantOpen ? this.assistantRect.y * this.windowHeight : Math.max(56, this.windowHeight - 70) }).zIndex(900)
+        .position({ x: this.assistantRect.x * this.windowWidth, y: this.assistantRect.y * this.windowHeight }).visibility(this.appAssistantOpen ? Visibility.Visible : Visibility.None).zIndex(900)
     }
-    }.width('100%').height('100%').onKeyEvent((event: KeyEvent): boolean => this.keyboard(event)).backgroundColor(this.videoFullscreen ? '#000000' : '#F1F3F5').expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
+    }.width('100%').height('100%').onKeyEvent((event: KeyEvent): boolean => this.keyboard(event)).backgroundColor(this.videoFullscreen ? '#000000' : '#EEF6FF').expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM, SafeAreaEdge.START, SafeAreaEdge.END])
   }
 }

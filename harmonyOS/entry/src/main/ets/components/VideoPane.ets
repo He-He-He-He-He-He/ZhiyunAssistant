@@ -155,9 +155,9 @@ export struct VideoPane {
   @Builder
   private speedPopup() {
     Column({ space: 4 }) {
-      Row() { Text('播放速度').fontSize(12).fontColor('#71839A'); Blank(); Text(this.speedValue.toFixed(2) + '×').fontSize(14).fontColor('#168BEE') }.width('100%')
-      Slider({ value: this.speedValue, min: 0.1, max: 16, step: 0.01 }).width('100%').selectedColor('#168BEE').showTips(true).onChange((value: number, mode: SliderChangeMode) => this.changeSpeed(value, mode))
-      Row() { Text('0.1×').fontSize(11).fontColor('#71839A'); Blank(); Button('恢复 1×').height(26).fontSize(11).backgroundColor('#EAF4FF').fontColor('#168BEE').onClick(() => this.changeSpeed(1, SliderChangeMode.Click)); Blank(); Text('16×').fontSize(11).fontColor('#71839A') }.width('100%')
+      Row() { Text('播放速度').fontSize(12).fontColor('#566A85'); Blank(); Text(this.speedValue.toFixed(2) + '×').fontSize(14).fontColor('#1F7BFF') }.width('100%')
+      Slider({ value: this.speedValue, min: 0.1, max: 16, step: 0.01 }).width('100%').selectedColor('#1F7BFF').showTips(true).onChange((value: number, mode: SliderChangeMode) => this.changeSpeed(value, mode))
+      Row() { Text('0.1×').fontSize(11).fontColor('#566A85'); Blank(); Button('恢复 1×').height(26).fontSize(11).backgroundColor('#E2F0FF').fontColor('#1F7BFF').onClick(() => this.changeSpeed(1, SliderChangeMode.Click)); Blank(); Text('16×').fontSize(11).fontColor('#566A85') }.width('100%')
     }.width(280).padding(14).backgroundColor('#FFFFFF').borderRadius(14)
   }
   @Builder
@@ -174,7 +174,7 @@ export struct VideoPane {
       Button({ type: ButtonType.Normal }) { Image(this.state.paused ? $r('app.media.video_play') : $r('app.media.video_pause')).id(this.state.paused ? 'video-paused-icon' : 'video-playing-icon').width(24).height(24) }.id('video-toggle').width(40).height(36).padding(0).backgroundColor(Color.Transparent).borderRadius(18).accessibilityText(this.state.paused ? '播放' : '暂停').onClick(() => { this.wakeControls(); this.playback.toggle(); })
       Text(stamp(this.changing ? this.seekValue : this.state.time)).fontSize(11).fontColor('#D4D9E0').width(50)
       if ((!this.liveCourse || this.replayEnabled) && (!this.source?.live || this.state.seekable)) {
-      Slider({ value: this.seekValue, min: this.state.start, max: Math.max(this.state.start + 1, this.state.end), step: 0.1 }).layoutWeight(1).selectedColor('#168BEE')
+      Slider({ value: this.seekValue, min: this.state.start, max: Math.max(this.state.start + 1, this.state.end), step: 0.1 }).layoutWeight(1).selectedColor('#1F7BFF')
         .onChange((value: number, mode: SliderChangeMode) => { this.wakeControls(); this.changing = mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving; this.seekValue = value; if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) { this.playback.seek(value); this.onClickVideo(); } })
       } else { Text('直播').fontSize(11).fontColor('#D4D9E0').layoutWeight(1) }
       if (!this.liveCourse || this.replayEnabled) {

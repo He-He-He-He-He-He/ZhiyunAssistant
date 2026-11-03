@@ -16,3 +16,11 @@
 @media(max-width:599px){.main-nav{padding:7px 10px}.main-nav button{gap:5px}.nav-icon{width:16px;height:16px}.classroom-title{flex-wrap:nowrap}.classroom-title h1{white-space:nowrap}.classroom-title .toolbar{flex-wrap:nowrap;gap:4px}.classroom-title .toolbar button{font-size:12px;padding:5px 8px}.classroom-hero{min-height:150px;padding:19px 17px;border-radius:18px;margin-bottom:16px}.hero-copy h2{font-size:18px;max-width:235px}.hero-copy p{font-size:12px}.hero-art{right:-8%;height:95%;opacity:.7}.hero-tabs{gap:4px}.hero-tabs button{font-size:12px;padding:6px 8px}.course-card{border-radius:15px}.page-main{scrollbar-gutter:auto}}
 .main-nav::-webkit-scrollbar,.study-toolbar::-webkit-scrollbar{display:none}
 .classroom-day{display:flex;align-items:baseline;gap:12px;margin:16px 4px 4px;font-size:16px;line-height:1.6}.classroom-day span{font-size:13px;font-weight:400;color:var(--muted)}
+/* Keep illustrations whole; narrow windows use the text-only hero. */
+.classroom-hero{align-items:center;gap:20px}.hero-copy{flex:1}.hero-art{position:static;flex:0 0 30%;width:30%;max-width:240px;height:140px;object-fit:contain;opacity:1;align-self:center}
+@media(max-width:699px){.hero-art{display:none}.hero-copy h2{max-width:none}.classroom-hero{min-height:0}}
+.assistant-entry-slot{display:inline-flex;flex:none}.app-assistant-entry{border:0;background:transparent;color:var(--blue);box-shadow:none;border-radius:9px;min-height:36px;padding:6px 9px;gap:6px}.app-assistant-entry svg{width:19px;height:19px;flex:none}.app-assistant-entry.active{background:#ddecff}
+@media(max-width:699px){.app-assistant-entry span{display:none}.app-assistant-entry{padding:5px 7px}.app-header{gap:3px}.app-header .account-name{display:none}}
+.marks{display:inline-flex;gap:4px;align-items:center}.marks button{width:36px;height:36px;min-width:36px;min-height:36px;padding:6px;flex:none}.collection-icon{display:block;width:22px;height:22px;flex:none;overflow:visible}
+.app-assistant-entry{border:1px solid #dbe7f5;background:#fff;color:#29435f;min-height:36px;padding:5px 11px}.app-assistant-entry span{display:inline}
+@media(max-width:699px){.assistant-entry-slot .app-assistant-entry{font-size:11px;padding:4px 6px;min-height:32px}.app-assistant-entry span{display:inline}}
