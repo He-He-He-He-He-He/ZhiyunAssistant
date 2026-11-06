@@ -2,7 +2,7 @@
 5382a9a14b5461ec1ae1778191c9f077c7c42d13d4812cd121162ec987f7277e  ZhiyunAssistant-HarmonyOS-0.7.10-unsigned.hap
 5b2490316e2bf30f8cb3a701ef769819974d5e3f5a5c3a95de52159fde5a6339  ZhiyunAssistant-Mac-1.8.9.dmg
 d6b8cd9f6eb1c60248acf2328e30496a96e1aabd0ae3ee65564df9d7c671dc7f  ZhiyunAssistant-Mac-1.8.9.zip
-4dc1c6790e56ea7e5d684f4655c03427e6be5c3b51318413992d233f9350532f  ZhiyunAssistant-0.8.0-beta.4-Windows-x64.zip
-c77434ec8c12fee70dd2e07086397a943783e0d01d162a9395598604e4470800  ZhiyunAssistant-0.8.0-beta.4-Windows-arm64.zip
-05d6009c91d7e47e852075dd7d5ba4a4f16295f5dd53940939fe3726a6dda043  ZhiyunAssistant-0.8.0-beta.4-Windows-x64-Setup.exe
-b1ade3df76f5e9c18eb7250c1d8bfc35d49f6076232f48628cf8de70787e7930  ZhiyunAssistant-0.8.0-beta.4-Windows-arm64-Setup.exe
+5f65f9940c9eb40be33bd6688ea2ec70187d7bc9b4bfc0a21c489d8beac13e12  ZhiyunAssistant-0.8.0-beta.4-Windows-x64.zip
+f4e2f65a86d9daac4cc10c34c4ff859635ab69007aec31acb6bbc642f254ff67  ZhiyunAssistant-0.8.0-beta.4-Windows-arm64.zip
+600d3e094ad26d78cd5a95794ff317ac4c6643f2e94ea302a60095a785ba4739  ZhiyunAssistant-0.8.0-beta.4-Windows-x64-Setup.exe
+415c16441c98afa0b26c6047ded77eb0bb6560ceb1464725e3d0acd9f24a41bb  ZhiyunAssistant-0.8.0-beta.4-Windows-arm64-Setup.exe
