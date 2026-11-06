@@ -18,7 +18,7 @@ export class SessionStore {
       const value = JSON.parse(new util.TextDecoder().decodeToString(rows[0]?.get(asset.Tag.SECRET))) as { cookies: Cookie[]; savedAt: number };
       if (gen !== SessionStore.epoch || !Array.isArray(value.cookies) || Date.now() - value.savedAt > 30 * 86400000) return;
       for (const cookie of value.cookies) {
-        if (!/^(?:\.?[\w-]+\.)*zju\.edu\.cn$/.test(cookie.domain || '') || /[\r\n]/.test(cookie.name + cookie.value)) continue;
+        if (!/^\.?(?:[\w-]+\.)*zju\.edu\.cn$/.test(cookie.domain || '') || /[\r\n]/.test(cookie.name + cookie.value)) continue;
         if (cookie.expirationDate && cookie.expirationDate < Date.now() / 1000) continue;
         const domain = cookie.domain?.replace(/^\./, '') || ''; if (!domain) continue;
         try { await desktopSession().cookies.set({ url: 'https://' + domain + (cookie.path || '/'), name: cookie.name, value: cookie.value, path: cookie.path, domain: cookie.hostOnly ? undefined : cookie.domain, secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite, expirationDate: cookie.expirationDate }); } catch (_) {}
@@ -32,10 +32,29 @@ export class SessionStore {
   static async saveCurrent(): Promise<void> {
     await SessionStore.refresh();
     if (!SessionStore.cookie(origins[0])) return;
-    const cookies = (await desktopSession().cookies.get({})).filter(cookie => /^(?:\.?[\w-]+\.)*zju\.edu\.cn$/.test(cookie.domain || ''));
+    const cookies = (await desktopSession().cookies.get({})).filter(cookie => /^\.?(?:[\w-]+\.)*zju\.edu\.cn$/.test(cookie.domain || ''));
     const value = JSON.stringify({ cookies, savedAt: Date.now() }); if (value.length > 128 * 1024) throw new Error('登录会话过长');
     await asset.add(new Map([[asset.Tag.ALIAS, alias], [asset.Tag.SECRET, new util.TextEncoder().encodeInto(value)]]));
     await desktopSession().cookies.flushStore();
   }
-  static async clear(): Promise<void> { SessionStore.epoch++; SessionStore.values.clear(); await asset.remove(new Map([[asset.Tag.ALIAS, alias]])); await asset.remove(new Map([[asset.Tag.ALIAS, accountAlias]])); fs.rmSync(path.join(storageRoot(), 'last-account.json'), { force: true }); const cookies = await desktopSession().cookies.get({}); for (const cookie of cookies) { if (/^(?:\.?[\w-]+\.)*zju\.edu\.cn$/.test(cookie.domain || '')) { try { await desktopSession().cookies.remove('https://' + cookie.domain!.replace(/^\./, '') + (cookie.path || '/'), cookie.name); } catch (_) {} } } await desktopSession().clearStorageData({ storages: ['cookies'], origin: 'https://classroom.zju.edu.cn' }); await desktopSession().clearStorageData({ storages: ['cookies'], origin: 'https://interactivemeta.cmc.zju.edu.cn' }); }
+  static async clear(): Promise<void> {
+    SessionStore.epoch++;
+    SessionStore.values.clear();
+    let failed = false;
+    // A locked legacy file or one failed cookie must not skip the remaining cleanup.
+    const attempt = async (operation: () => unknown) => { try { await operation(); } catch (_) { failed = true; } };
+    for (const name of [alias, accountAlias]) await attempt(() => asset.remove(new Map([[asset.Tag.ALIAS, name]])));
+    await attempt(() => fs.rmSync(path.join(storageRoot(), 'last-account.json'), { force: true }));
+    await attempt(async () => {
+      const cookies = await desktopSession().cookies.get({});
+      for (const cookie of cookies) {
+        if (/^\.?(?:[\w-]+\.)*zju\.edu\.cn$/.test(cookie.domain || '')) {
+          await attempt(() => desktopSession().cookies.remove('https://' + cookie.domain!.replace(/^\./, '') + (cookie.path || '/'), cookie.name));
+        }
+      }
+    });
+    for (const origin of origins) await attempt(() => desktopSession().clearStorageData({ storages: ['cookies'], origin }));
+    await attempt(() => desktopSession().cookies.flushStore());
+    if (failed) throw new Error('部分登录会话或 Cookie 无法删除，请重试退出登录');
+  }
 }

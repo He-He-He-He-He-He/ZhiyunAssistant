@@ -7,13 +7,17 @@ const ts = require(process.env.SUIKE_TYPESCRIPT || 'typescript');
 const root = path.resolve(__dirname, '../entry/src/main/ets');
 function load(file, stubs = {}, globals = {}) {
   const filename = path.join(root, file + '.ets');
-  const output = ts.transpileModule(fs.readFileSync(filename,'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.CommonJS } }).outputText;
+  let source = fs.readFileSync(filename,'utf8');
+  // Exercise dormant persistence primitives separately; production gate remains disabled.
+  if (file === 'services/OfficialLoginStore' && globals.__testEnableCredentialPrimitives) source = source.replace('CREDENTIAL_FEATURE_ENABLED: boolean = false', 'CREDENTIAL_FEATURE_ENABLED: boolean = true');
+  if (file === 'services/ArkWebIsolatedLogin' && globals.__testEnableUnsafeWebSubmit) source = source.replace('ISOLATED_WEB_SUBMISSION_ENABLED: boolean = false', 'ISOLATED_WEB_SUBMISSION_ENABLED: boolean = true');
+  const output = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2021, module: ts.ModuleKind.CommonJS } }).outputText;
   const exports = {};
   vm.runInNewContext(output, { exports, require: name => name.startsWith('.') ? load(path.join(path.dirname(file), name),stubs,globals) : (stubs[name] || (name==='@kit.ArkUI'?{FrameCallback:class {}}:{})), Date, Map, Set, Error, ArrayBuffer, setTimeout, clearTimeout, ...globals }, {filename});
   return exports;
 }
 const timeline = load('model/Timeline');
-const {Zhiyun, AccessDenied} = load('services/Zhiyun');
+const {Zhiyun, AccessDenied, AuthenticationExpired} = load('services/Zhiyun');
 const course = {subId:'sample',courseId:'example',title:'Fixture',start:Date.parse('2026-10-09T08:00:00+08:00')/1000,end:Date.parse('2026-10-09T10:00:00+08:00')/1000};
 const slide = (id,t) => ({id,t,url:`https://cmc.zju.edu.cn/${id}.png`,thumb:'',note:''});
 test('30-minute preparation and class start/end boundaries',()=>{
@@ -283,14 +287,16 @@ test('native login uses official submit handler, never submits captcha or untrus
  const {officialLoginUrl,submitLoginScript}=load('model/OfficialLogin');
  assert.equal(officialLoginUrl('https://zjuam.zju.edu.cn/cas/login?service=sample'),true);
  for(const url of ['http://zjuam.zju.edu.cn/cas/login','https://zjuam.zju.edu.cn.evil.test/cas/login','https://other.zju.edu.cn/cas/login'])assert.equal(officialLoginUrl(url),false);
- function run({captcha=false,origin='https://zjuam.zju.edu.cn',hiddenParent=false}={}) {
-  let clicks=0;const nodes={username:{dispatchEvent(){}},password:{dispatchEvent(){}},dl:{click(){clicks++}},kaptcha:{getClientRects:()=>hiddenParent?[]:[{}]}};
-  const result=vm.runInNewContext(submitLoginScript('fixture-user','fixture-password'),{location:{origin,pathname:'/cas/login'},document:{getElementById:id=>nodes[id]},window:{checkForm(){}},Event:class {},getComputedStyle:()=>({display:captcha?'block':'none'})});
+ function run({captcha=false,origin='https://zjuam.zju.edu.cn',hiddenParent=false,action='/cas/login',method='post',disabled=false,iframe=false}={}) {
+  let clicks=0;const nodes={username:{dispatchEvent(){}},password:{dispatchEvent(){}},dl:{disabled,click(){clicks++}},errormsg:{textContent:'旧错误'},kaptcha:{getClientRects:()=>hiddenParent?[]:[{}]}};
+  const form={method,getAttribute:()=>action,querySelector:s=>s.startsWith('input#username')?nodes.username:s.startsWith('input#password')?nodes.password:nodes.dl},win={checkForm(){}};win.top=iframe?{}:win;
+  const result=vm.runInNewContext(submitLoginScript('fixture-user','fixture-password'),{URL,location:{origin,href:origin+'/cas/login',pathname:'/cas/login'},document:{getElementById:id=>nodes[id],querySelector:()=>form},window:win,Event:class {},getComputedStyle:()=>({display:captcha?'block':'none'})});
   return {result,clicks,nodes};
  }
- assert.equal(run().clicks,1);assert.equal(run().nodes.password.value,'fixture-password');
- assert.equal(run({captcha:true}).clicks,0);assert.equal(run({captcha:true}).result,'verification');
+ assert.equal(run().clicks,1);assert.equal(run().nodes.password.value,'fixture-password');assert.equal(run().nodes.errormsg.textContent,'');
+ const captcha=run({captcha:true});assert.equal(captcha.clicks,0);assert.equal(captcha.result,'verification');assert.equal(captcha.nodes.password.value,undefined,'do not place a password into a page requiring manual verification');
  assert.equal(run({origin:'https://other.test'}).clicks,0);
+ for(const opts of [{action:'https://evil.invalid/cas/login'},{action:'/other'},{method:'get'},{iframe:true},{disabled:true}]) {const r=run(opts);assert.equal(r.clicks,0);assert.equal(r.nodes.password.value,undefined)}
  assert.equal(run({captcha:true,hiddenParent:true}).result,'submitted','a hidden captcha container should not force official verification');
 });
 test('long sessions use encrypted bounded pieces, atomic commit and survive guest preload',async()=>{
@@ -306,6 +312,7 @@ test('long sessions use encrypted bounded pieces, atomic commit and survive gues
  const {SessionStore}=load('services/SessionStore',stubs);await Promise.all([SessionStore.restore(),SessionStore.restore()]);assert.equal(queries,2);
  await SessionStore.rememberAccount({id:'fixture-user',name:'Fixture',tenantId:112});
  const savedIdentity=load('services/SessionStore',stubs).SessionStore;assert.equal((await savedIdentity.savedAccount()).id,'fixture-user');
+ await assert.rejects(SessionStore.saveCurrent(),/没有可保存的有效课堂会话/);cookies['https://classroom.zju.edu.cn']='session=bad\r\nheader=x';await assert.rejects(SessionStore.saveCurrent(),/没有可保存的有效课堂会话/);assert.equal(records.size,1,'invalid cookies must not be persisted');
  const token='PHPSESSID=fixture-'+ 'x'.repeat(4000);cookies['https://classroom.zju.edu.cn']=token;await SessionStore.saveCurrent();assert.ok(records.size>2);
  cookies['https://classroom.zju.edu.cn']='PHPSESSID=guest';const restored=load('services/SessionStore',stubs).SessionStore;await restored.restore();assert.equal(restored.cookie('https://classroom.zju.edu.cn'),token);assert.equal(restored.cookie('https://untrusted.test'),'');
  restored.beginLogin();cookies['https://classroom.zju.edu.cn']='PHPSESSID=new-login';fail=true;await assert.rejects(restored.saveCurrent());
@@ -313,6 +320,17 @@ test('long sessions use encrypted bounded pieces, atomic commit and survive gues
  cookies['https://classroom.zju.edu.cn']='';await afterInterruption.clear();assert.equal(afterInterruption.cookie('https://classroom.zju.edu.cn'),'');assert.equal(records.size,0);assert.equal(await afterInterruption.savedAccount(),undefined);
 });
 
+test('session restoration retries after a transient asset read failure',async()=>{
+ let available=false;const text=b=>Buffer.from(b).toString(),bytes=s=>new Uint8Array(Buffer.from(s));const tags={ALIAS:1,RETURN_TYPE:2,SECRET:3};
+ const stubs={'@kit.AssetStoreKit':{asset:{Tag:tags,ReturnType:{ALL:0},query:async q=>{if(!available)throw Error('locked');const alias=text(q.get(1));return alias==='zhiyun-official-session-v1'?[new Map([[3,bytes(JSON.stringify({classroom:'session=fixture',interactive:'',savedAt:Date.now()}))]])]:[]}}},'@kit.ArkTS':{util:{TextEncoder:class {encodeInto(s){return bytes(s)}},TextDecoder:{create:()=>({decodeToString:text})}}},'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookieSync:()=>''}}}};
+ const {SessionStore}=load('services/SessionStore',stubs);await SessionStore.restore();assert.equal(SessionStore.hasRecoverableSession(),false);available=true;await SessionStore.restore();assert.equal(SessionStore.hasRecoverableSession(),true);
+});
+test('legacy v1 session without an account remains recoverable without trusting identity',async()=>{
+ const records=new Map(),cookies={};const tags={ALIAS:1,RETURN_TYPE:2,SECRET:3};const bytes=s=>new Uint8Array(Buffer.from(s)),text=b=>Buffer.from(b).toString();
+ records.set('zhiyun-official-session-v1',bytes(JSON.stringify({classroom:'session=legacy-fixture',interactive:'',savedAt:Date.now()})));
+ const stubs={'@kit.AssetStoreKit':{asset:{Tag:tags,ReturnType:{ALL:0},query:async q=>{const b=records.get(text(q.get(tags.ALIAS)));return b?[new Map([[3,b]])]:[]}}},'@kit.ArkTS':{util:{TextEncoder:class {encodeInto(s){return bytes(s)}},TextDecoder:{create:()=>({decodeToString:text})}}},'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookieSync:origin=>cookies[origin]||''}}}};
+ const {SessionStore}=load('services/SessionStore',stubs);await SessionStore.restore();assert.equal(await SessionStore.savedAccount(),undefined);assert.equal(SessionStore.hasRecoverableSession(),true);assert.equal(SessionStore.cookie('https://classroom.zju.edu.cn'),'session=legacy-fixture');
+});
 test('touch follows finger at double distance, settles proportionally and respects both ends',()=>{
  const nav=load('model/PageNavigation');
  assert.equal(nav.dragPageOffset(4,99,2,500,-500),-1000);
@@ -1219,11 +1237,12 @@ test('repeated native checkbox callbacks do not unselect an offline course durin
 });
 
 function indexLogicFixture(names,extra={}){
+ extra={NativeAccountAcceptance:load('services/NativeAccountAcceptance').NativeAccountAcceptance,...extra};
  names=Array.from(new Set(names.concat(names.some(n=>['rebuildGroups','displayedTranscript','context'].includes(n))?['cleanTranscript']:[],names.includes('restoreProgress')?['skipOpeningPages']:[],names.includes('openNoteReference')?['rememberJump']:[])));
  const source=fs.readFileSync(path.join(root,'pages/Index.ets'),'utf8');
  const methods=names.map(name=>{let start=source.indexOf('  private '+name+'(');if(start<0)start=source.indexOf('  private async '+name+'(');assert.ok(start>=0,name);const firstEnd=source.indexOf('\n',start);if(source.slice(start,firstEnd).trim().endsWith('}'))return source.slice(start,firstEnd);const end=source.indexOf('\n  }',start)+4;return source.slice(start,end)}).join('\n');
  const output=ts.transpileModule('export class IndexLogic {\n'+methods+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText,exports={};
- vm.runInNewContext(output,{exports,...inputGlobals,KeyCode:{KEYCODE_DPAD_LEFT:2014,KEYCODE_DPAD_RIGHT:2015,KEYCODE_PAGE_UP:2068,KEYCODE_PAGE_DOWN:2069},...timeline,...load('model/StudyNavigation'),...load('model/SmartSkip'),...load('model/LearningProgress'),...load('model/PanePreferences'),...load('model/NativeSelections'),...load('model/SelectionKeys'),...load('services/ChatStore'),...load('services/SummaryCache'),key:load('services/LocalStore').key,Date,Map,Set,Math,Number,JSON,setTimeout,clearTimeout,...extra});const fixture=Object.assign(new exports.IndexLogic(),{summaryController:{capture:()=>undefined},paneRects:[],groups:[],activePane:'slides',videoOpenTicket:0}); for(const method of ['learningTime','prepareImages','rewind'])if(typeof fixture[method]!=='function')fixture[method]=()=>method==='learningTime'?0:undefined;return fixture;
+ vm.runInNewContext(output,{exports,...inputGlobals,KeyCode:{KEYCODE_DPAD_LEFT:2014,KEYCODE_DPAD_RIGHT:2015,KEYCODE_PAGE_UP:2068,KEYCODE_PAGE_DOWN:2069},...timeline,...load('model/StudyNavigation'),...load('model/SmartSkip'),...load('model/LearningProgress'),...load('model/PanePreferences'),...load('model/NativeSelections'),...load('model/SelectionKeys'),...load('services/ChatStore'),...load('services/SummaryCache'),...load('services/NativeLogin'),AuthenticationExpired,key:load('services/LocalStore').key,Date,Map,Set,Math,Number,JSON,setTimeout,clearTimeout,CREDENTIAL_FEATURE_ENABLED:true,IsolatedCleanupError:load('services/IsolatedLogin').IsolatedCleanupError,...extra});const fixture=Object.assign(new exports.IndexLogic(),{summaryController:{capture:()=>undefined},paneRects:[],groups:[],activePane:'slides',videoOpenTicket:0,authEpoch:0}); for(const method of ['learningTime','prepareImages','rewind','refreshCredentialStatus'])if(typeof fixture[method]!=='function')fixture[method]=()=>method==='learningTime'?0:undefined;return fixture;
 }
 test('merging can be switched off without destroying raw screenshots or transcription boundaries',()=>{
  const raw=[slide('a',0),{...slide('b',30),duplicateOf:'a',duplicateUrl:slide('a',0).url},slide('c',90)], lines=[{id:'first',t:10,text:'first'},{id:'second',t:50,text:'second'},{id:'third',t:100,text:'third'}];
@@ -1635,7 +1654,7 @@ test('restoring encrypted identity permits offline use without cookies or a netw
  const source=fs.readFileSync(path.join(root,'pages/Index.ets'),'utf8').split('\n').find(l=>l.includes('private async restoreAccount()')),exports={};let resumes=0,initialized=0;
  const output=ts.transpileModule('export class RestoreFixture {\n'+source+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText;
  vm.runInNewContext(output,{exports,SessionStore:{restore:async()=>{},savedAccount:async()=>({id:'fixture',name:'Fixture',tenantId:112})}});
- const p=new exports.RestoreFixture();p.generation=1;p.privacyAccepted=true;p.initializeStore=()=>initialized++;p.resume=()=>resumes++;await p.restoreAccount();assert.equal(p.account.id,'fixture');assert.equal(p.screen,'home');assert.equal(initialized,1);assert.equal(resumes,1);
+ const p=new exports.RestoreFixture();p.generation=1;p.privacyAccepted=true;p.initializeStore=()=>initialized++;p.resume=()=>resumes++;let statusReads=0;p.refreshCredentialStatus=()=>statusReads++;await p.restoreAccount();assert.equal(p.account.id,'fixture');assert.equal(p.screen,'home');assert.equal(initialized,1);assert.equal(resumes,1);assert.equal(statusReads,1);
  p.privacyAccepted=false;p.account=undefined;await p.restoreAccount();assert.equal(p.account,undefined);assert.equal(initialized,1);
 });
 
@@ -1651,11 +1670,28 @@ test('exported question and page-summary note references retain their source lab
 });
 test('network failures in a logged-in account do not clear its identity or cached course library',async()=>{
  const source=fs.readFileSync(path.join(root,'pages/Index.ets'),'utf8'),start=source.indexOf('  private async tick()'),end=source.indexOf('\n  }',start)+4,exports={};
- const output=ts.transpileModule('export class TickFixture {\n'+source.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText;vm.runInNewContext(output,{exports,AccessDenied,Date,Math,Promise});
+ const output=ts.transpileModule('export class TickFixture {\n'+source.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText;vm.runInNewContext(output,{exports,AccessDenied,AuthenticationExpired,Date,Math,Promise});
  const p=new exports.TickFixture(),identity={id:'fixture-user'};Object.assign(p,{account:identity,foreground:true,generation:1,screen:'home',catalogAt:0,failureCount:0,courses:[course],api:{courses:async()=>{throw Error('network unavailable')}}});let delay;p.schedule=v=>delay=v;await p.tick();assert.equal(p.account,identity);assert.equal(p.courses[0].subId,course.subId);assert.equal(p.screen,'home');assert.ok(delay>0);
 });
 
 
+test('returning to foreground retries a startup restore cancelled by backgrounding',async()=>{
+ let release,initialized=0,resumes=0;const gate=new Promise(r=>release=r);const session={restore:async()=>gate,savedAccount:async()=>({id:'fixture',name:'Fixture',tenantId:112})};
+ const p=indexLogicFixture(['restoreAccount','visibilityChanged'],{SessionStore:session});Object.assign(p,{generation:1,privacyAccepted:true,foreground:false,screen:'home',rotationWatch(){},checkReleaseUpdate(){},initializeStore(){initialized++},resume(){resumes++;this.generation++}});
+ const pending=p.restoreAccount();p.generation++;p.foreground=true;p.visibilityChanged();release();await pending;await new Promise(r=>setTimeout(r,0));assert.equal(p.account.id,'fixture');assert.equal(initialized,1);assert.equal(resumes,1);
+});
+test('startup recovers a session without a saved identity only after official account verification',async()=>{
+ let calls=0,saved=0,remembered=0;const session={hasRecoverableSession:()=>true,saveCurrent:async()=>saved++,rememberAccount:async()=>remembered++};
+ const p=indexLogicFixture(['tick'],{SessionStore:session,AccessDenied,webview:{WebCookieManager:{saveCookieAsync:async()=>{}}}});Object.assign(p,{foreground:true,generation:1,screen:'home',catalogAt:Date.now()/1000,api:{account:async()=>{calls++;return {id:'verified',name:'Fixture',tenantId:112}}}});p.initializeStore=()=>{};p.schedule=()=>{};await p.tick();assert.equal(calls,1);assert.equal(p.account.id,'verified');assert.equal(saved,1);assert.equal(remembered,1);
+ const q=indexLogicFixture(['tick'],{SessionStore:{hasRecoverableSession:()=>false},AccessDenied});Object.assign(q,{foreground:true,generation:1,screen:'home',api:{account:async()=>{throw Error('must not probe')}}});await q.tick();assert.equal(q.account,undefined);
+});
+test('identity save failure remains visible after course refresh',async()=>{
+ const session={hasRecoverableSession:()=>true,saveCurrent:async()=>{},rememberAccount:async()=>{throw Error('unavailable')}};
+ const p=indexLogicFixture(['tick'],{SessionStore:session,AccessDenied,webview:{WebCookieManager:{saveCookieAsync:async()=>{}}}});Object.assign(p,{foreground:true,generation:1,screen:'home',catalogAt:0,api:{account:async()=>({id:'verified',name:'Fixture',tenantId:112}),courses:async()=>[],cachedPermissions:()=>({}),refreshToday:async()=>{},permissions:async()=>{}}});p.initializeStore=()=>{};p.schedule=()=>{};await p.tick();assert.match(p.message,/登录状态暂未保存/);
+});
+test('non-401 login hints direct retained accounts to manual login without submitting a password',async()=>{
+ const p=indexLogicFixture(['tick'],{AccessDenied,Date,Math,Promise});Object.assign(p,{account:{id:'fixture'},foreground:true,generation:1,screen:'home',catalogAt:0,failureCount:0,api:{courses:async()=>{throw Error('登录失效，请重新登录')}}});p.schedule=()=>{};await p.tick();assert.match(p.message,/官方页面手动登录/);assert.equal(p.account.id,'fixture');
+});
 test('text-only lessons persist sentence bookmarks and restore them without opening unavailable video',async()=>{
  const p=indexLogicFixture(['saveProgress','learningTime','restoreProgress']);let saved,restored;
  Object.assign(p,{progressReady:true,store:{saveJson:(name,value)=>saved=JSON.parse(value)},course,screen:'lesson',demo:false,showVideo:false,groups:[],lines:[{id:'a',t:0,text:'fixture'},{id:'b',t:120,text:'second'}],selected:0,textStudyTime:137,info:{sub_status:6},generation:1,preferredVideo:false});
@@ -1673,11 +1709,222 @@ test('continuous playback lookup handles large timelines, equal timestamps and s
  const {spokenLineIndex}=load('model/TranscriptPlayback'),lines=Array.from({length:10000},(_,i)=>({id:String(i),t:i*10,end:i*10+5,text:'fixture'}));assert.equal(spokenLineIndex(lines,90001),9000);assert.equal(spokenLineIndex(lines,90007),-1);assert.equal(spokenLineIndex(lines,99995),-1);assert.equal(spokenLineIndex([{t:0,end:2},{t:0,end:3}],1),1);assert.equal(spokenLineIndex([],0),-1);
 });
 test('explicit logout from nested pages clears identity and navigation and hides offline entries immediately',async()=>{
- const source=fs.readFileSync(path.join(root,'pages/Index.ets'),'utf8'),start=source.indexOf('  private async logout('),end=source.indexOf('\n  }',start)+4,exports={};let cleared=0,cookies=0,paused=0;
- const code=ts.transpileModule('export class LogoutFixture {\n'+source.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText;vm.runInNewContext(code,{exports,KnowledgeJobs:{cancel:()=>{}},SessionStore:{clear:async()=>cleared++},webview:{WebCookieManager:{clearAllCookiesSync:()=>cookies++}},clearTimeout});
- const p=new exports.LogoutFixture();Object.assign(p,{account:{id:'fixture'},course,screen:'lesson',plaza:true,allCoursesOpen:true,collectionPage:'later',notesLibrary:true,cacheSettings:true,downloadsOpen:true,lessonDownloadOpen:true,offlineViewing:true,offlineOpen:true,offlineEntries:[{course}],downloadJobs:[{}],courseReturnStack:[{}],authOfficial:true,authPassword:'temporary-fixture',library:{pause:()=>paused++},api:{usePermissionStorage:()=>{}},collections:{bind:()=>{}},closeMedia:()=>{},stop:()=>{}});await p.logout();assert.equal(cleared,1);assert.equal(cookies,1);assert.equal(paused,1);assert.equal(p.screen,'home');assert.equal(p.account,undefined);assert.equal(p.store,undefined);assert.equal(p.course,undefined);assert.equal(p.offlineEntries.length,0);for(const flag of ['plaza','allCoursesOpen','notesLibrary','cacheSettings','downloadsOpen','lessonDownloadOpen','offlineOpen','authOfficial'])assert.equal(p[flag],false,flag);assert.equal(p.courseReturnStack.length,0);assert.equal(p.authPassword,'');
+ const source=fs.readFileSync(path.join(root,'pages/Index.ets'),'utf8'),start=source.indexOf('  private async logout('),end=source.indexOf('\n  }',start)+4,exports={};let cleared=0,cookies=0,paused=0,forgotten=0;
+ const code=ts.transpileModule('export class LogoutFixture {\n'+source.slice(start,end)+'\n}',{compilerOptions:{target:ts.ScriptTarget.ES2021,module:ts.ModuleKind.CommonJS}}).outputText;vm.runInNewContext(code,{exports,...load('services/NativeAccountAcceptance'),KnowledgeJobs:{cancel:()=>{}},SessionStore:{clear:async()=>cleared++},OfficialLoginStore:{clear:async()=>forgotten++},webview:{WebCookieManager:{clearAllCookiesSync:()=>cookies++}},clearTimeout});
+ const p=new exports.LogoutFixture();Object.assign(p,{account:{id:'fixture'},course,screen:'lesson',plaza:true,allCoursesOpen:true,collectionPage:'later',notesLibrary:true,cacheSettings:true,downloadsOpen:true,lessonDownloadOpen:true,offlineViewing:true,offlineOpen:true,offlineEntries:[{course}],downloadJobs:[{}],courseReturnStack:[{}],authOfficial:true,authUser:'fixture-user',authPassword:'temporary-fixture',library:{pause:()=>paused++},api:{usePermissionStorage:()=>{}},collections:{bind:()=>{}},closeMedia:()=>{},stop:()=>{},stopSilentLogin:()=>{}});await p.logout();assert.equal(cleared,1);assert.equal(forgotten,1,'logout forgets the saved campus account');assert.equal(cookies,2);assert.equal(paused,1);assert.equal(p.screen,'home');assert.equal(p.account,undefined);assert.equal(p.store,undefined);assert.equal(p.course,undefined);assert.equal(p.offlineEntries.length,0);for(const flag of ['plaza','allCoursesOpen','notesLibrary','cacheSettings','downloadsOpen','lessonDownloadOpen','offlineOpen','authOfficial'])assert.equal(p[flag],false,flag);assert.equal(p.courseReturnStack.length,0);assert.equal(p.authUser,'');assert.equal(p.authPassword,'');
 });
 
+
+test('legacy password deletion is fail-closed and attempts both aliases',async()=>{
+ const removed=[];let fail=true;
+ const asset={Tag:{ALIAS:1,SECRET:2,ACCESSIBILITY:3,CONFLICT_RESOLUTION:4},Accessibility:{DEVICE_UNLOCKED:1},ConflictResolution:{OVERWRITE:1},add:async()=>{},remove:async attrs=>{const alias=Buffer.from(attrs.get(1)).toString();removed.push(alias);if(fail&&alias.endsWith('login-v1'))throw {code:24000001};throw {code:24000002}}};
+ const stubs={'@kit.AssetStoreKit':{asset},'@kit.ArkTS':{util:{TextEncoder:class {encodeInto(s){return new Uint8Array(Buffer.from(s))}}}}};
+ const {OfficialLoginStore}=load('services/OfficialLoginStore',stubs);
+ assert.equal(OfficialLoginStore.save,undefined);assert.equal(OfficialLoginStore.usable,undefined);
+ await assert.rejects(OfficialLoginStore.clear(),/无法删除/);assert.deepEqual(removed,['zhiyun-official-login-v2','zhiyun-official-login-v1','zhiyun-official-login-state-v1']);
+ fail=false;await OfficialLoginStore.clear();
+});
+function loginAssetFixture(){
+ const records=new Map(),state={failRead:false,failWrite:false,failRemove:false,blockWrite:null,failWriteAlias:''};
+ const tag={ALIAS:1,RETURN_TYPE:2,SECRET:3,ACCESSIBILITY:4,CONFLICT_RESOLUTION:5};const str=v=>Buffer.from(v).toString();
+ const asset={Tag:tag,ReturnType:{ALL:1},Accessibility:{DEVICE_FIRST_UNLOCKED:1,DEVICE_UNLOCKED:2},ConflictResolution:{OVERWRITE:1},
+  query:async attrs=>{if(state.failRead)throw {code:24000001};const secret=records.get(str(attrs.get(1)));if(!secret)throw {code:24000002};return [new Map([[3,secret]])]},
+  add:async attrs=>{assert.equal(attrs.get(tag.ACCESSIBILITY),2,'password must require an unlocked device');if(state.blockWrite)await state.blockWrite;if(state.failWrite||state.failWriteAlias===str(attrs.get(1)))throw {code:24000001};records.set(str(attrs.get(1)),attrs.get(3))},
+  remove:async attrs=>{if(state.failRemove)throw {code:24000001};if(!records.delete(str(attrs.get(1))))throw {code:24000002}}};
+ const stubs={'@kit.AssetStoreKit':{asset},'@kit.ArkTS':{util:{TextEncoder:class {encodeInto(s){return new Uint8Array(Buffer.from(s))}},TextDecoder:{create:()=>({decodeToString:str})}}}};
+ return {records,state,stubs,store:load('services/OfficialLoginStore',stubs,{__testEnableCredentialPrimitives:true}).OfficialLoginStore};
+}
+test('enrollment rate is durable, fail-closed, and survives logout',async()=>{
+ const f=loginAssetFixture(),s=f.store;await s.reserveEnrollment(s.generation());await assert.rejects(s.reserveEnrollment(s.generation()),/频繁/);const restart=load('services/OfficialLoginStore',f.stubs,{__testEnableCredentialPrimitives:true}).OfficialLoginStore;await assert.rejects(restart.reserveEnrollment(restart.generation()),/频繁/);await s.clear();await assert.rejects(s.reserveEnrollment(s.generation()),/频繁/);assert.equal(f.records.size,2);
+ const g=loginAssetFixture();g.state.failRead=true;await assert.rejects(g.store.reserveEnrollment(g.store.generation()),/限流/);g.state.failRead=false;g.state.failWrite=true;await assert.rejects(g.store.reserveEnrollment(g.store.generation()));assert.equal(g.records.size,0);
+});
+test('credential primitives require consent and matching authenticated account and tenant',async()=>{
+ const {store,records}=loginAssetFixture(),a={id:'account-a',tenantId:112},b={id:'account-b',tenantId:112},typed={username:'fixture-user',password:'fixture-password'},gen=store.generation();
+ await assert.rejects(store.saveVerified(typed,a,a,false,gen));await assert.rejects(store.saveVerified(typed,a,b,true,gen));await assert.rejects(store.saveVerified(typed,a,{...a,tenantId:113},true,gen));assert.equal(records.size,0);
+ await store.saveVerified(typed,a,a,true,gen);const current=store.generation();assert.equal(await store.reserve(b,current),undefined);const attempt=await store.reserve(a,current);assert.equal(attempt.username,'fixture-user');
+ await assert.rejects(store.confirm(a,b,attempt.generation));assert.equal(await store.reserve(a,attempt.generation),undefined);await store.confirm(a,a,attempt.generation);const next=await store.reserve(a,store.generation());assert.ok(next);await assert.rejects(store.confirm(a,a,attempt.generation));
+});
+test('one attempt is durable, serial, and never issued on failed asset writes',async()=>{
+ const f=loginAssetFixture(),s=f.store,a={id:'fixture',tenantId:112};await s.saveVerified({username:'fixture',password:'secret'},a,a,true,s.generation());const gen=s.generation();
+ f.state.failRead=true;await assert.rejects(s.reserve(a,gen));f.state.failRead=false;f.state.failWrite=true;await assert.rejects(s.reserve(a,gen));f.state.failWrite=false;
+ const results=await Promise.allSettled([s.reserve(a,gen),s.reserve(a,gen)]);assert.equal(results.filter(v=>v.status==='fulfilled'&&v.value).length,1);assert.equal(results.filter(v=>v.status==='rejected').length,1);
+ const restart=load('services/OfficialLoginStore',f.stubs,{__testEnableCredentialPrimitives:true}).OfficialLoginStore;assert.equal(await restart.reserve(a,restart.generation()),undefined);
+});
+test('isolated verifier requires consent, freshness and exact identity with one submit',async()=>{
+ const {IsolatedLogin}=load('services/IsolatedLogin'),events=[],expected={id:'account-a',tenantId:112},credentials={username:'fixture',password:'fixture-secret'};
+ let fresh=true,identity=expected,result='submitted',cleanupFails=false;
+ const adapter={prepareFresh:async()=>{events.push('prepare');return fresh},submitOnce:async()=>{events.push('submit');return result},classroomCookie:async()=>{events.push('cookie');return 'session=fixture'},identify:async()=>{events.push('identity');return identity},closeAndClear:async()=>{events.push('cleanup');if(cleanupFails)throw Error('cleanup failed')},cancel(){events.push('cancel')}};
+ const v=new IsolatedLogin(adapter);await assert.rejects(v.verifyOnce(false,credentials,expected));assert.equal(events.length,0);
+ fresh=false;await assert.rejects(v.verifyOnce(true,credentials,expected),/隔离/);assert.deepEqual(events,['prepare','cleanup']);events.length=0;fresh=true;
+ identity={id:'account-b',tenantId:112};await assert.rejects(v.verifyOnce(true,credentials,expected),/不一致/);assert.deepEqual(events,['prepare','submit','cookie','identity','cleanup']);events.length=0;
+ identity={id:'account-a',tenantId:113};await assert.rejects(v.verifyOnce(true,credentials,expected),/不一致/);events.length=0;identity=expected;result='verification';await assert.rejects(v.verifyOnce(true,credentials,expected));assert.deepEqual(events,['prepare','submit','cleanup']);events.length=0;result='submitted';cleanupFails=true;await assert.rejects(v.verifyOnce(true,credentials,expected),/清理失败/);cleanupFails=false;
+ const session=await v.verifyOnce(true,credentials,expected);assert.equal(session.cookie,'session=fixture');assert.equal(session.identity.id,'account-a');
+});
+test('verified isolated session commits transactionally and cannot revive after cancellation',async()=>{
+ const records=new Map(),tag={ALIAS:1,RETURN_TYPE:2,SECRET:3,ACCESSIBILITY:4,CONFLICT_RESOLUTION:5,DATA_LABEL_NORMAL_LOCAL_1:6},str=v=>Buffer.from(v).toString();let fail=false,failManifest=false,gate=null,entered=null,browserCookie='session=old';
+ const asset={Tag:tag,ReturnType:{ALL:1},Accessibility:{DEVICE_UNLOCKED:1},ConflictResolution:{OVERWRITE:1},query:async a=>{const r=records.get(str(a.get(1)));if(!r)throw {code:24000002};return [r]},add:async a=>{const key=str(a.get(1));if(fail||(failManifest&&key==='zhiyun-official-session-v2'))throw Error('fixture write failure');if(gate&&key==='zhiyun-official-session-v2'){entered();await gate}records.set(key,new Map(a))},remove:async a=>{if(a.has(1)){if(!records.delete(str(a.get(1))))throw {code:24000002}}else records.clear()}};
+ const stubs={'@kit.AssetStoreKit':{asset},'@kit.ArkTS':{util:{TextEncoder:class{encodeInto(s){return new Uint8Array(Buffer.from(s))}},TextDecoder:{create:()=>({decodeToString:str})}}},'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookieSync:()=> browserCookie}}}};
+ const {SessionStore:s}=load('services/SessionStore',stubs);await s.saveCurrent();const original=records.get('zhiyun-official-session-v2').get(3);fail=true;await assert.rejects(s.adoptVerifiedCookie('session=new',s.generation()));assert.equal(s.cookie('https://classroom.zju.edu.cn'),'session=old');fail=false;
+ const cold=load('services/SessionStore',stubs).SessionStore;failManifest=true;await assert.rejects(cold.adoptVerifiedCookie('session=new',cold.generation()));failManifest=false;const checked=load('services/SessionStore',stubs).SessionStore;await checked.restore();assert.equal(checked.cookie('https://classroom.zju.edu.cn'),'session=old','cold adoption must never overwrite the active slot');
+ browserCookie='session=new';const coldManual=load('services/SessionStore',stubs).SessionStore;failManifest=true;await assert.rejects(coldManual.saveCurrent());failManifest=false;const manualCheck=load('services/SessionStore',stubs).SessionStore;await manualCheck.restore();assert.equal(manualCheck.cookie('https://classroom.zju.edu.cn'),'session=old','cold manual save must not overwrite committed chunks');browserCookie='session=old';
+ let release,start;browserCookie='session=new';const cancelManual=load('services/SessionStore',stubs).SessionStore;gate=new Promise(r=>release=r);const manualReady=new Promise(r=>{start=r});entered=start;const manualPending=cancelManual.saveCurrent();await manualReady;cancelManual.beginLogin();gate=null;release();await manualPending;assert.equal(str(records.get('zhiyun-official-session-v2').get(3)),str(original));browserCookie='session=old';
+ gate=new Promise(r=>release=r);const ready=new Promise(r=>{start=r});entered=start;const pending=s.adoptVerifiedCookie('session=new',s.generation());await ready;s.beginLogin();gate=null;release();await assert.rejects(pending,/取消/);assert.equal(str(records.get('zhiyun-official-session-v2').get(3)),str(original));
+ const restarted=load('services/SessionStore',stubs).SessionStore;await restarted.restore();assert.equal(restarted.cookie('https://classroom.zju.edu.cn'),'session=old');
+ await restarted.adoptVerifiedCookie('session=new',restarted.generation());assert.equal(restarted.cookie('https://classroom.zju.edu.cn'),'session=new');
+});
+test('production ArkWeb verifier refuses to expose password or click even if invoked',async()=>{
+ let calls=0;const webview={WebCookieManager:{clearAllCookiesSync(){},existCookie:()=>false}},controller={isIncognitoMode:()=>true,getUrl:()=> 'about:blank',loadUrl(){},stop(){},runJavaScript(){calls++}},host={attach:async()=>controller,detach:async()=>{}};
+ const {ArkWebIsolatedLogin}=load('services/ArkWebIsolatedLogin',{'@kit.ArkWeb':{webview}}),a=new ArkWebIsolatedLogin(host,{cancel(){}});await assert.rejects(a.prepareFresh(),/暂不可用/);await assert.rejects(a.submitOnce({username:'fixture',password:'secret'}),/暂不可用/);assert.equal(calls,0);await a.closeAndClear();
+});
+test('isolated adapter fails closed when private cookies survive clearing',async()=>{
+ let attached=0,clears=0;const webview={WebCookieManager:{clearAllCookiesSync(){clears++},existCookie:()=>true}},host={attach:async()=>{attached++;return {isIncognitoMode:()=>true,getUrl:()=> 'about:blank',stop(){},loadUrl(){assert.fail('cannot load after failed clearing')}}},detach:async()=>{}};
+ const {ArkWebIsolatedLogin}=load('services/ArkWebIsolatedLogin',{'@kit.ArkWeb':{webview}},{__testEnableUnsafeWebSubmit:true}),a=new ArkWebIsolatedLogin(host,{cancel(){}});await assert.rejects(a.prepareFresh(),/Cookie/);await assert.rejects(a.closeAndClear(),/清理/);assert.equal(attached,1);assert.equal(clears,2);
+});
+test('isolated adapter refuses a classroom identity unrelated to submitted username',async()=>{
+ let url='about:blank',username='other';const webview={WebCookieManager:{clearAllCookiesSync(){},existCookie:()=>false}},controller={isIncognitoMode:()=>true,getUrl:()=>url,loadUrl(){url='https://zjuam.zju.edu.cn/cas/login'},stop(){},runJavaScript:async s=>s.includes('const fields =')?'submitted':JSON.stringify({ready:true,captcha:false,error:''})},host={attach:async()=>controller,detach:async()=>{}};
+ const {ArkWebIsolatedLogin}=load('services/ArkWebIsolatedLogin',{'@kit.ArkWeb':{webview}},{__testEnableUnsafeWebSubmit:true}),a=new ArkWebIsolatedLogin(host,{cancel(){},accountForIsolatedCookie:async()=>({id:'a',tenantId:112,username})});await a.prepareFresh();await a.submitOnce({username:'fixture',password:'secret'});await assert.rejects(a.identify('synthetic'),/账号/);username='';await assert.rejects(a.identify('synthetic'),/账号/);username='fixture';assert.equal((await a.identify('synthetic')).id,'a');await a.closeAndClear();
+});
+test('ArkWeb adapter submits once in private mode and never reads normal cookies',async()=>{
+ const events=[];let url='about:blank',submitted=0;const controller={isIncognitoMode:()=>true,getUrl:()=>url,loadUrl(v){events.push('load');url=v},stop(){events.push('stop')},runJavaScript:async script=>{if(script.includes('const fields =')){submitted++;url='https://classroom.zju.edu.cn/';return JSON.stringify('submitted')}return JSON.stringify(JSON.stringify({ready:true,captcha:false,error:''}))}};
+ const host={attach:async()=>{events.push('attach');return controller},detach:async()=>events.push('detach')};
+ const webview={WebCookieManager:{clearAllCookiesSync(privateMode){assert.equal(privateMode,true);events.push('clear')},existCookie(privateMode){assert.equal(privateMode,true);return false},fetchCookieSync(origin,privateMode){assert.equal(privateMode,true);return 'session=synthetic'}}};
+ const {ArkWebIsolatedLogin}=load('services/ArkWebIsolatedLogin',{'@kit.ArkWeb':{webview}},{__testEnableUnsafeWebSubmit:true}),adapter=new ArkWebIsolatedLogin(host,{accountForIsolatedCookie:async()=>({id:'a',tenantId:112,username:'fixture'}),cancel(){}},1000);
+ assert.equal(await adapter.prepareFresh(),true);url='https://zjuam.zju.edu.cn/cas/login';assert.equal(await adapter.submitOnce({username:'fixture',password:'synthetic'}),'submitted');await assert.rejects(adapter.submitOnce({username:'fixture',password:'synthetic'}),/已使用/);assert.equal(submitted,1);assert.equal(await adapter.classroomCookie(),'session=synthetic');assert.equal((await adapter.identify('session=synthetic')).id,'a');await adapter.closeAndClear();assert.deepEqual(events,['attach','clear','load','stop','detach','clear']);
+});
+test('ArkWeb adapter masks errors that could contain submitted credentials',async()=>{
+ let url='about:blank';const controller={isIncognitoMode:()=>true,getUrl:()=>url,loadUrl(){url='https://zjuam.zju.edu.cn/cas/login'},stop(){},runJavaScript:async script=>{if(script.includes('const fields ='))throw Error('runtime leaked synthetic-password');return JSON.stringify(JSON.stringify({ready:true,captcha:false,error:''}))}};
+ const host={attach:async()=>controller,detach:async()=>{}},webview={WebCookieManager:{clearAllCookiesSync(){},existCookie:()=>false}};const {ArkWebIsolatedLogin}=load('services/ArkWebIsolatedLogin',{'@kit.ArkWeb':{webview}},{__testEnableUnsafeWebSubmit:true}),adapter=new ArkWebIsolatedLogin(host,{cancel(){}},1000);await adapter.prepareFresh();await assert.rejects(adapter.submitOnce({username:'fixture',password:'synthetic-password'}),err=>!err.message.includes('synthetic-password')&&/手动登录/.test(err.message));await adapter.closeAndClear();
+});
+test('ArkWeb adapter rejects ordinary mode and requires cleanup after cancellation',async()=>{
+ let clears=0,detaches=0,cancels=0;const webview={WebCookieManager:{clearAllCookiesSync(privateMode){assert.equal(privateMode,true);clears++},existCookie:()=>false}},host={attach:async()=>({isIncognitoMode:()=>false,getUrl:()=> 'about:blank',stop(){}}),detach:async()=>{detaches++}};
+ const {ArkWebIsolatedLogin}=load('services/ArkWebIsolatedLogin',{'@kit.ArkWeb':{webview}},{__testEnableUnsafeWebSubmit:true}),adapter=new ArkWebIsolatedLogin(host,{cancel(){cancels++}},1000);
+ await assert.rejects(adapter.prepareFresh(),/隔离/);adapter.cancel();await adapter.closeAndClear();assert.equal(clears,1);assert.equal(detaches,1);assert.equal(cancels,1);
+});
+test('guarded login enrollment and recovery require consent, identity and a persisted reservation',async()=>{
+ const f=loginAssetFixture(),s=f.store,{IsolatedLogin,GuardedLoginFlow}=load('services/IsolatedLogin'),expected={id:'account-a',tenantId:112},credentials={username:'fixture',password:'secret'},events=[];
+ let identity=expected,result='submitted';
+ const adapter={prepareFresh:async()=>{events.push('prepare');return true},submitOnce:async()=>{events.push('submit');return result},classroomCookie:async()=>'session=fixture',identify:async()=>identity,cancel(){events.push('cancel')},closeAndClear:async()=>events.push('cleanup')};
+ const flow=new GuardedLoginFlow(new IsolatedLogin(adapter),s);
+ await assert.rejects(flow.enroll(false,credentials,expected));assert.equal(events.length,0);identity={id:'wrong',tenantId:112};await assert.rejects(flow.enroll(true,credentials,expected));assert.equal(f.records.size,0);
+ identity=expected;await flow.enroll(true,credentials,expected);await assert.rejects(flow.recover(false,expected));events.length=0;
+ result='verification';await assert.rejects(flow.recover(true,expected));assert.deepEqual(events,['prepare','submit','cleanup']);
+ const restarted=load('services/OfficialLoginStore',f.stubs,{__testEnableCredentialPrimitives:true}).OfficialLoginStore;assert.equal(await restarted.reserve(expected,restarted.generation()),undefined,'failed attempt remains disarmed across restart');
+ result='submitted';await flow.enroll(true,credentials,expected);const verified=await flow.recover(true,expected);assert.equal(verified.session.identity.id,expected.id);assert.equal(await flow.recover(true,expected),undefined,'flow never confirms before session adoption');
+ await s.confirm(expected,verified.session.identity,verified.reservationGeneration);assert.ok(await flow.recover(true,expected));
+});
+test('guarded enrollment snapshots credentials and identity before asynchronous verification',async()=>{
+ const f=loginAssetFixture(),{IsolatedLogin,GuardedLoginFlow}=load('services/IsolatedLogin');let release,entered;const gate=new Promise(r=>release=r),ready=new Promise(r=>entered=r);
+ const adapter={prepareFresh:async()=>true,submitOnce:async()=>{entered();await gate;return 'submitted'},classroomCookie:async()=>'session=fixture',identify:async()=>({id:'a',tenantId:112}),cancel(){},closeAndClear:async()=>{}};
+ const flow=new GuardedLoginFlow(new IsolatedLogin(adapter),f.store),creds={username:'fixture',password:'original'},account={id:'a',tenantId:112},pending=flow.enroll(true,creds,account);await ready;creds.password='changed';account.id='other';release();await pending;
+ const saved=await f.store.reserve({id:'a',tenantId:112},f.store.generation());assert.equal(saved.password,'original');
+});
+test('guarded login cancellation rejects in-flight and overlapping enrollment',async()=>{
+ const f=loginAssetFixture(),{IsolatedLogin,GuardedLoginFlow}=load('services/IsolatedLogin');let release,entered;const gate=new Promise(r=>release=r),ready=new Promise(r=>entered=r);
+ const adapter={prepareFresh:async()=>true,submitOnce:async()=>{entered();await gate;return 'submitted'},classroomCookie:async()=>'session=fixture',identify:async()=>({id:'a',tenantId:112}),cancel(){},closeAndClear:async()=>{}};
+ const flow=new GuardedLoginFlow(new IsolatedLogin(adapter),f.store),creds={username:'fixture',password:'secret'},account={id:'a',tenantId:112},pending=flow.enroll(true,creds,account);await ready;await assert.rejects(flow.enroll(true,creds,account),/正在进行/);flow.cancel();release();await assert.rejects(pending,/取消/);assert.equal(f.records.size,0);
+});
+test('isolated verifier cancels during identity lookup and rejects overlapping attempts',async()=>{
+ const {IsolatedLogin}=load('services/IsolatedLogin');let release,entered;const gate=new Promise(r=>release=r),ready=new Promise(r=>entered=r),events=[];
+ const adapter={prepareFresh:async()=>true,submitOnce:async()=>{events.push('submit');return 'submitted'},classroomCookie:async()=>'session=fixture',identify:async()=>{entered();await gate;return {id:'a',tenantId:112}},cancel:()=>events.push('cancel'),closeAndClear:async()=>events.push('cleanup')};
+ const v=new IsolatedLogin(adapter),creds={username:'fixture',password:'secret'},account={id:'a',tenantId:112},pending=v.verifyOnce(true,creds,account);await ready;await assert.rejects(v.verifyOnce(true,creds,account),/正在进行/);v.cancel();release();await assert.rejects(pending,/取消/);assert.deepEqual(events,['submit','cancel','cleanup']);
+});
+test('failed credential deletion blocks subsequent attempts until cleanup succeeds',async()=>{
+ const f=loginAssetFixture(),s=f.store,a={id:'fixture',tenantId:112};await s.saveVerified({username:'fixture',password:'secret'},a,a,true,s.generation());f.state.failRemove=true;await assert.rejects(s.clear());await assert.rejects(s.reserve(a,s.generation()));await assert.rejects(s.saveVerified({username:'fixture',password:'secret'},a,a,true,s.generation()));const restart=load('services/OfficialLoginStore',f.stubs,{__testEnableCredentialPrimitives:true}).OfficialLoginStore;assert.equal(await restart.reserve(a,restart.generation()),undefined);f.state.failRemove=false;await s.clear();assert.equal(await s.reserve(a,s.generation()),undefined);
+});
+test('credential tombstone prevents restart recovery when deletion and record disarm fail',async()=>{
+ const f=loginAssetFixture(),s=f.store,a={id:'fixture',tenantId:112};await s.saveVerified({username:'fixture',password:'secret'},a,a,true,s.generation());
+ f.state.failRemove=true;f.state.failWriteAlias='zhiyun-official-login-v2';await assert.rejects(s.clear());
+ const restarted=load('services/OfficialLoginStore',f.stubs,{__testEnableCredentialPrimitives:true}).OfficialLoginStore;
+ assert.equal(await restarted.reserve(a,restarted.generation()),undefined);assert.equal(Buffer.from(f.records.get('zhiyun-official-login-consent-state-v1')).toString(),'revoked-v1');
+});
+test('missing, corrupt or unreadable consent never releases a credential',async()=>{
+ const f=loginAssetFixture(),s=f.store,a={id:'fixture',tenantId:112};await s.saveVerified({username:'fixture',password:'secret'},a,a,true,s.generation());
+ const key='zhiyun-official-login-consent-state-v1';f.records.delete(key);assert.equal(await s.reserve(a,s.generation()),undefined);
+ f.records.set(key,Buffer.from('invalid'));assert.equal(await s.reserve(a,s.generation()),undefined);
+ f.state.failRead=true;await assert.rejects(s.reserve(a,s.generation()));
+});
+test('failed credential replacement leaves consent revoked across restart',async()=>{
+ const f=loginAssetFixture(),s=f.store,a={id:'fixture',tenantId:112};await s.saveVerified({username:'fixture',password:'old'},a,a,true,s.generation());
+ f.state.failWriteAlias='zhiyun-official-login-v2';await assert.rejects(s.saveVerified({username:'fixture',password:'new'},a,a,true,s.generation()));
+ f.state.failWriteAlias='';const restarted=load('services/OfficialLoginStore',f.stubs,{__testEnableCredentialPrimitives:true}).OfficialLoginStore;
+ assert.equal(await restarted.reserve(a,restarted.generation()),undefined);
+});
+test('dormant primitive illustrates that deletion and disarm failure cannot ensure revocation',async()=>{
+ const f=loginAssetFixture(),s=f.store,a={id:'fixture',tenantId:112};await s.saveVerified({username:'fixture',password:'secret'},a,a,true,s.generation());f.state.failRemove=true;f.state.failWrite=true;await assert.rejects(s.clear());await assert.rejects(s.reserve(a,s.generation()));f.state.failRemove=false;f.state.failWrite=false;
+ const restart=load('services/OfficialLoginStore',f.stubs,{__testEnableCredentialPrimitives:true}).OfficialLoginStore;assert.ok(await restart.reserve(a,restart.generation()),'asset outage prevents persistent revocation; do not enable auto login until resolved');
+});
+test('isolated classroom identity uses only the supplied cookie and never adopts or deletes the current session',async()=>{
+ let code=200,payload={params:{id:'new-account',tenant_id:112}},request,removed=0,destroyed=0;
+ const http={RequestMethod:{GET:0,POST:1},HttpDataType:{STRING:0},createHttp:()=>({request:async(url,options)=>{request={url,options};return {responseCode:code,result:JSON.stringify(payload)}},destroy:()=>destroyed++})};
+ const {Zhiyun}=load('services/Zhiyun',{'@kit.NetworkKit':{http},'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookieSync:()=>{throw Error('current cookie must not be used')}}}},'@kit.AssetStoreKit':{asset:{remove:async()=>removed++}}});
+ const api=new Zhiyun(),identity=await api.accountForIsolatedCookie('session=isolated-fixture');assert.equal(identity.id,'new-account');assert.equal(identity.tenantId,112);assert.equal(request.options.header.Cookie,'session=isolated-fixture');assert.equal(removed,0);
+ await assert.rejects(api.accountForIsolatedCookie(''));await assert.rejects(api.accountForIsolatedCookie('a=b\r\nheader=x'));payload={params:{id:'new-account'}};await assert.rejects(api.accountForIsolatedCookie('session=isolated-fixture'),/无法确认/);payload={params:{id:{bad:1},tenant_id:112}};await assert.rejects(api.accountForIsolatedCookie('session=isolated-fixture'),/无法确认/);
+ code=401;await assert.rejects(api.accountForIsolatedCookie('session=isolated-fixture'));assert.equal(removed,0);assert.equal(destroyed,4);
+});
+test('a 401 account response does not delete stored identity or session',async()=>{
+ let removed=0;const http={RequestMethod:{GET:0,POST:1},HttpDataType:{STRING:0},createHttp:()=>({request:async()=>({responseCode:401,result:''}),destroy(){}})};
+ const {Zhiyun}=load('services/Zhiyun',{'@kit.NetworkKit':{http},'@kit.ArkWeb':{webview:{WebCookieManager:{fetchCookieSync:()=> 'session=fixture'}}},'@kit.AssetStoreKit':{asset:{remove:async()=>removed++}}});await assert.rejects(new Zhiyun().account(),/登录失效/);assert.equal(removed,0);
+});
+test('logout invalidates pending password saves and waits for in-flight writes before deletion',async()=>{
+ const f=loginAssetFixture(),s=f.store,a={id:'fixture',tenantId:112},old=s.generation();let release;f.state.blockWrite=new Promise(r=>release=r);
+ const saving=s.saveVerified({username:'fixture',password:'secret'},a,a,true,old);await new Promise(r=>setTimeout(r,0));const clearing=s.clear();release();await assert.rejects(saving);await clearing;assert.equal(Buffer.from(f.records.get('zhiyun-official-login-consent-state-v1')).toString(),'revoked-v1');
+ f.state.blockWrite=null;await assert.rejects(s.saveVerified({username:'fixture',password:'secret'},a,a,true,old));assert.equal(f.records.size,1);
+});
+test('session deletion surfaces real errors but accepts missing records',async()=>{
+ let calls=0,fail=true;const asset={Tag:{DATA_LABEL_NORMAL_LOCAL_1:1,ALIAS:2},remove:async()=>{calls++;if(fail&&calls%2===1)throw {code:24000001};throw {code:24000002}}};
+ const stubs={'@kit.AssetStoreKit':{asset},'@kit.ArkTS':{util:{TextEncoder:class {encodeInto(s){return new Uint8Array(Buffer.from(s))}}}}};
+ const {SessionStore}=load('services/SessionStore',stubs);await assert.rejects(SessionStore.clear(),/无法删除/);assert.equal(calls,2);fail=false;await SessionStore.clear();assert.equal(calls,4);
+});
+test('logout blocks new login during cleanup and keeps failure visible for retry',async()=>{
+ let release,clears=0,failed=true;const pending=new Promise(r=>release=r);
+ const p=indexLogicFixture(['logout','beginLogin'],{KnowledgeJobs:{cancel(){}},SessionStore:{clear:async()=>{clears++;await pending},beginLogin(){throw Error('must not start')}},OfficialLoginStore:{clear:async()=>{if(failed)throw Error('asset unavailable')}},webview:{WebCookieManager:{clearAllCookiesSync(){}}},officialLoginUrl:()=>false});
+ Object.assign(p,{privacyAccepted:true,account:{id:'old'},screen:'home',api:{usePermissionStorage(){}},collections:{bind(){}},closeMedia(){},stop(){},web:{loadUrl(){},getUrl(){return ''}}});
+ p.beginLogin();assert.match(p.message,/请先退出当前账号/);const first=p.logout();assert.equal(p.authCleanup,true);assert.equal(p.account,undefined);p.beginLogin();assert.match(p.message,/清理/);await p.logout();assert.equal(clears,1);release();await first;assert.equal(p.account,undefined);assert.equal(p.authCleanupFailed,true);assert.match(p.message,/未完成/);p.beginLogin();assert.match(p.message,/清理/);failed=false;await p.logout();assert.equal(p.authCleanupFailed,false);
+});
+test('credential enrollment requires an explicit action and clears the password field',async()=>{
+ let release,checks=0,submitted=0;const store={clear:async()=>{}};
+ const p=indexLogicFixture(['enrollCredential'],{OfficialLoginStore:store});Object.assign(p,{account:{id:'a',tenantId:112},credentialDialog:true,credentialBusy:false,credentialEpoch:0,credentialUser:' user ',credentialPassword:'secret',foreground:true});p.makeCredentialFlow=()=>({enroll:async(consent,c,i,current)=>{checks++;await new Promise(r=>release=r);assert.equal(current(),true);submitted++;assert.equal(consent,true);assert.equal(c.username,'user');assert.equal(c.password,'secret');assert.equal(i.id,'a');},cancel(){}});
+ const ongoing=p.enrollCredential();assert.equal(p.credentialPassword,'');assert.equal(checks,1);assert.equal(submitted,0);release();await ongoing;assert.equal(submitted,1);assert.match(p.credentialMessage,/确定的课堂 401/);
+});
+test('cancel during rate reservation prevents enrollment and clears persisted credentials',async()=>{
+ let release,submitted=0,clears=0,cancels=0;const store={generation:()=>0,reserveEnrollment:()=>new Promise(r=>release=r),clear:async()=>{clears++}};
+ const p=indexLogicFixture(['enrollCredential','closeCredentialDialog'],{OfficialLoginStore:store});Object.assign(p,{account:{id:'a',tenantId:112},credentialDialog:true,credentialBusy:false,credentialEpoch:0,credentialUser:'user',credentialPassword:'secret',foreground:true});p.makeCredentialFlow=()=>({enroll:async(_consent,_credentials,_account,current)=>{await new Promise(r=>release=r);if(current())submitted++;else throw Error('cancelled')},cancel(){cancels++}});
+ const ongoing=p.enrollCredential();const closing=p.closeCredentialDialog();assert.equal(p.credentialBusy,true);release();await Promise.all([ongoing,closing]);assert.equal(submitted,0);assert.equal(clears,1);assert.equal(cancels,1);assert.equal(p.credentialDialog,false);assert.equal(p.credentialPassword,'');assert.equal(p.credentialBusy,false);
+});
+test('cancel keeps host unavailable until in-flight verification has finished',async()=>{
+ let release,entered;const started=new Promise(r=>entered=r);const store={generation:()=>0,reserveEnrollment:async()=>{},clear:async()=>{}};
+ const p=indexLogicFixture(['enrollCredential','closeCredentialDialog'],{OfficialLoginStore:store});Object.assign(p,{account:{id:'a',tenantId:112},credentialDialog:true,credentialBusy:false,credentialEpoch:0,credentialUser:'user',credentialPassword:'secret',foreground:true});p.makeCredentialFlow=()=>({enroll:()=>{entered();return new Promise(r=>release=r)},cancel(){}});
+ const ongoing=p.enrollCredential();await started;let closed=false;const closing=p.closeCredentialDialog().then(()=>closed=true);await Promise.resolve();await Promise.resolve();assert.equal(p.credentialBusy,true);assert.equal(closed,false);release();await Promise.all([ongoing,closing]);assert.equal(closed,true);assert.equal(p.credentialBusy,false);
+});
+test('failed enrollment does not echo sensitive verifier errors',async()=>{
+ const store={generation:()=>0,reserveEnrollment:async()=>{}};const p=indexLogicFixture(['enrollCredential'],{OfficialLoginStore:store});Object.assign(p,{account:{id:'a',tenantId:112},credentialDialog:true,credentialBusy:false,credentialEpoch:0,credentialUser:'user',credentialPassword:'secret',foreground:true});p.makeCredentialFlow=()=>({enroll:async()=>{throw Error('secret')}});await p.enrollCredential();assert.equal(p.credentialMessage.includes('secret'),false);assert.equal(p.credentialPassword,'');
+});
+test('disabled production gate prevents saving or releasing legacy credentials after failed deletion and restart',async()=>{
+ const f=loginAssetFixture(),a={id:'fixture',tenantId:112},creds={username:'fixture',password:'secret'};await f.store.saveVerified(creds,a,a,true,f.store.generation());f.state.failRemove=true;f.state.failWrite=true;await assert.rejects(f.store.clear());
+ const actual=load('services/OfficialLoginStore',f.stubs);assert.equal(actual.CREDENTIAL_FEATURE_ENABLED,false);const s=actual.OfficialLoginStore;assert.equal(await s.reserve(a,s.generation()),undefined);await assert.rejects(s.saveVerified(creds,a,a,true,s.generation()),/暂不可用/);await assert.rejects(s.confirm(a,a,s.generation()),/暂不可用/);assert.ok(f.records.has('zhiyun-official-login-v2'));
+});
+test('credential deletion failure remains visible even if native enrollment was cancelled',async()=>{
+ const {IsolatedCleanupError}=load('services/IsolatedLogin');let release,entered;const start=new Promise(r=>entered=r);const store={generation:()=>0,reserveEnrollment:async()=>{},clear:async()=>{throw Error('secret cleanup')}};
+ const p=indexLogicFixture(['enrollCredential','closeCredentialDialog'],{OfficialLoginStore:store,IsolatedCleanupError});Object.assign(p,{account:{id:'a',tenantId:112},credentialDialog:true,credentialBusy:false,credentialEpoch:0,credentialUser:'user',credentialPassword:'secret',foreground:true});p.makeCredentialFlow=()=>({enroll:()=>{entered();return new Promise((_,reject)=>release=()=>reject(new IsolatedCleanupError()))},cancel(){}});
+ const pending=p.enrollCredential();await start;const closing=p.closeCredentialDialog();release();await Promise.all([pending,closing]);assert.equal(p.authCleanupFailed,true);assert.match(p.message,/凭据清理未完成/);assert.equal(p.message.includes('secret'),false);
+});
+test('manual login retries despite an old school error and ignores stale probes',async()=>{
+ let resolve,calls=0;const p=indexLogicFixture(['loginPageReady'],{officialLoginUrl:()=>true,inspectLoginScript:'inspect',webString:x=>x});Object.assign(p,{authEpoch:1,authProbe:false,authSubmitting:true,authSubmitted:false,foreground:true,screen:'login',web:{runJavaScript:()=>new Promise(r=>resolve=r),getUrl:()=> 'https://zjuam.zju.edu.cn/cas/login'}});p.dispatchLogin=()=>calls++;
+ let pending=p.loginPageReady('https://zjuam.zju.edu.cn/cas/login');resolve(JSON.stringify({ready:true,error:'旧错误',captcha:false}));await pending;assert.equal(calls,1);assert.equal(p.authSubmitting,true);
+ p.authReady=false;p.authSubmitted=true;p.authDispatchPending=true;pending=p.loginPageReady('https://zjuam.zju.edu.cn/cas/login');resolve(JSON.stringify({ready:true,error:'旧错误',captcha:false}));await pending;assert.equal(p.authSubmitting,true);assert.equal(p.authError,undefined);
+ p.authReady=false;pending=p.loginPageReady('https://zjuam.zju.edu.cn/cas/login');p.authEpoch++;p.authProbe=false;p.authError='new view';resolve(JSON.stringify({ready:true,error:'stale',captcha:true}));await pending;assert.equal(calls,1);assert.equal(p.authError,'new view');assert.equal(p.authOfficial,undefined);
+});
+test('late submit results cannot change cancelled login UI and captcha handoff is explained',async()=>{
+ let resolve;const p=indexLogicFixture(['dispatchLogin'],{officialLoginUrl:()=>true,submitLoginScript:()=>'',webString:x=>x});Object.assign(p,{authEpoch:1,authSubmitting:true,authSubmitted:false,authPassword:'secret',authUser:'user',screen:'login',foreground:true,web:{getUrl:()=>'',runJavaScript:()=>new Promise(r=>resolve=r)}});
+ let pending=p.dispatchLogin();p.authEpoch++;p.authPassword='new';p.authSubmitting=false;resolve('verification');await pending;assert.equal(p.authPassword,'new');assert.equal(p.authOfficial,undefined);
+ p.authSubmitting=true;p.authSubmitted=false;pending=p.dispatchLogin();resolve('verification');await pending;assert.equal(p.authOfficial,true);assert.match(p.authError,/验证码/);
+});
+test('native enrollment UI separates disabled production defaults from explicit per-launch native acceptance',()=>{
+ const source=fs.readFileSync(path.join(root,'pages/Index.ets'),'utf8'),privacy=fs.readFileSync(path.join(root,'components/PrivacyPage.ets'),'utf8');
+ for(const name of ['startSilentLogin','silentLoginStep','askToRememberLogin','typedLogin','OfficialLoginStore.save','OfficialLoginStore.usable'])assert.equal(source.includes(name),false,name);
+ assert.match(source,/Button\('原生验证与保存账号'\)/);assert.match(privacy,/生产默认真实 POST 和保存开关关闭/);assert.match(privacy,/原生账号验收（测试）/);assert.match(source,/同意额外验证并保存/);assert.match(source,/new NativeLoginCoordinator/);assert.doesNotMatch(source,/ArkWebIsolatedLogin|incognitoMode: true/);assert.match(source,/其他登录方式也不会保存密码/);assert.match(privacy,/无身份绑定的旧版密码不会用于自动登录/);
+ assert.match(source,/this\.authCleanupFailed \|\| this\.busy/);assert.match(source,/if \(this\.account\) \{ this\.message = '请先退出当前账号/);
+});
 
 test('modal selection dismissal clears every mounted editor and never calls disposed editors',()=>{
  const {NativeSelections}=load('model/NativeSelections');let text=0,editor=0;NativeSelections.bind('text',()=>text++);NativeSelections.bind('broken',()=>{throw Error('disposed native controller')});NativeSelections.bind('editor',()=>editor++);NativeSelections.clear();assert.equal(text,1);assert.equal(editor,1);NativeSelections.unbind('text');NativeSelections.unbind('editor');NativeSelections.clear();assert.equal(text,1);assert.equal(editor,1);NativeSelections.unbind('broken');

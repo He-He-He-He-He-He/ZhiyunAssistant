@@ -529,8 +529,8 @@ function privacy() {
         el("p", { text: "课程、笔记、进度、收藏和离线资源只存储在本机。普通缓存清理不删除笔记和离线下载。" }),
       ]),
       el("div", { class: "privacy-grid" }, [
-        card("lock", "校园登录", "校园账号密码由浙江大学官方认证页面处理；未选择记住时不保存密码，主动选择“记住校园登录”后仅保存在本机系统钥匙串。登录会话通过本机 WebKit 与仅本机用户可读取的加密快照保存和恢复；会话失效时使用学校官方认证。"),
-        card("key", "密钥", "个人 API 密钥由本机系统钥匙串保护；应用更新后可能需要系统授权，密钥不写入普通配置，也不会出现在页面中。"),
+        card("lock", "校园登录", "校园账号密码在浙江大学官方认证页面手动输入；此版本不保存新校园密码，也不会自动填写或提交密码。退出登录或菜单“忘记校园登录”可删除以前保存的校园登录。登录会话以本机加密快照保存和恢复，不上传给开发者。团队签名版本的加密密钥由系统钥匙串保护；ad-hoc 本地构建中，密钥与本机绑定，但同一 macOS 用户下的其他程序可能读取。"),
+        card("key", "密钥", "个人 API 密钥加密保存在本机，不写入普通配置，也不会出现在页面中。正式签名版本由系统钥匙串保护加密密钥；未签名的本地构建中，同一 macOS 用户下的其他程序可能读取。"),
         card("agent", "AI 与应用助手", "只有启用 AI 时，所选课程上下文和你的问题才会发送到所选 AI 服务（个人 DeepSeek API 或本机模型；本地模式的推理不上传至这些云端 AI 服务）。应用助手会按你的指令读取必要的页面状态并操作本应用，过程可随时停止。API 费用由你的账户承担。AI 回答可能有误，请结合课堂原文判断。"),
         card("home", "独立工具", "本工具独立开发，不代表学校或智云课堂运营方；只访问账号允许的课程。断网不会自动退出登录。"),
       ]),
@@ -680,8 +680,8 @@ async function refreshAccount({ preserveRoute = false } = {}) {
       await native.call("account", { id: result.id });
       await loadData();
     } else account = result;
-    await native.call("identity", { text: JSON.stringify(result) })
-      .catch((error) => toast(error.message));
+    // Do not finalize login when native storage rejected a stale or failed identity.
+    await native.call("identity", { text: JSON.stringify(result) });
     if (!preserveRoute) await native.call("loginDone");
     if (!preserveStudy) {
       page = lastClassPage;
@@ -4341,7 +4341,7 @@ function apiSetup(key) {
       el("h3", { text: apiReady ? "API设置" : "连接 AI 助手" }),
       el("p", {
         class: "hint",
-        text: "个人 API 可从 DeepSeek 开放平台获取，费用由个人 API 账户承担。密钥保存在本机系统钥匙串中。本地模型无需密钥，需先安装本地服务及所选的 Gemma 或 Qwen。",
+        text: "个人 API 可从 DeepSeek 开放平台获取，费用由个人 API 账户承担。密钥加密保存在本机。本地模型无需密钥，需先安装本地服务及所选的 Gemma 或 Qwen。",
       }),
       input,
       select(
@@ -7048,6 +7048,13 @@ function getGlobalAssistant() {
       }).catch(()=>{});
     },
     ready: refreshAIAvailability,
+    recoverKey: async () => {
+      const owner = account;
+      const result = await native.call("authorizeCredentials", {purpose:"api"});
+      if (owner !== account) throw new Error("账号已切换，请重试");
+      if (!result?.ready) throw new Error("尚未获得密钥读取授权，可以重试或输入新密钥");
+      await refreshAIAvailability(); syncAIOptions();
+    },
     provider: () => aiConnection.provider(), providerStatus: () => aiConnection.status, providerDescription: () => aiConnection.description(),
     setProvider: async provider => { prefs.aiProvider = provider; await save("prefs.json", prefs); await refreshAIAvailability(); syncAIOptions(); },
     localModels: () => aiConnection.localModels(), localModel: () => aiConnection.localModel(),

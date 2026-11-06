@@ -1,4 +1,4 @@
-import { AgentRunner } from './agent-runtime.js';
+import { AgentRunner, hasToolMarkup } from './agent-runtime.js';
 import { userMessage } from './user-errors.js';
 import { makeIcon } from './theme-icons.js';
 import { themeFor } from './theme-catalog.js';
@@ -172,6 +172,7 @@ export class GlobalAssistant {
   // Text-only Markdown: paragraphs, lists, headings, bold and code. No model HTML, links or images.
   format(node, text) {
     node.replaceChildren(); node.classList.remove('streaming');
+    if (hasToolMarkup(text)) text = '这次操作未执行成功，请重新发送请求。';
     const inline = (parent, value) => {
       const pattern = /(\*\*([^*]+)\*\*|`([^`]+)`)/g; let at = 0, match;
       while ((match = pattern.exec(value))) { parent.append(document.createTextNode(value.slice(at, match.index))); parent.append(create(match[2] ? 'strong' : 'code', '', match[2] || match[3])); at = pattern.lastIndex; }
@@ -335,7 +336,7 @@ export class GlobalAssistant {
     } else if (event.type === 'retry') {
       // The first attempt of this round is discarded; anything it streamed is withdrawn.
       if (this.reply) { window.cancelAnimationFrame(this.draftFrame); this.draftFrame = 0; this.reply.remove(); this.reply = null; }
-      this.draft = ''; if (!this.progress) this.startProgress(); this.live('网络较慢，正在重试…');
+      this.draft = ''; if (!this.progress) this.startProgress(); this.live(event.protocol ? '正在重新生成操作指令…' : '网络较慢，正在重试…');
     } else if (event.type === 'result' && this.currentStep) {
       const step = this.currentStep; Object.assign(step, { ok: event.ok !== false, error: clip(event.error ? userMessage(event.error) : '', 200), result: event.ok === false ? '' : clip(this.stepResult(event.action, event.output), 40), ms: Date.now() - step.started });
       delete step.started; this.stepNode?.replaceWith(this.stepRow(step)); this.stepNode = null; this.currentStep = null;
@@ -464,6 +465,10 @@ export class GlobalAssistant {
     const credentials = section('个人 DeepSeek API'), badge = create('span', 'agent-config-badge', personalReady ? '已配置' : '未配置'); badge.dataset.ready = String(personalReady); credentials.querySelector('h4').append(badge);
     const password = create('input'); password.type = 'password'; password.placeholder = personalReady ? '输入新密钥以更换' : 'sk-…'; password.autocomplete = 'off'; password.setAttribute('aria-label', 'DeepSeek API 密钥');
     credentials.append(field('API 密钥', password, '密钥仅保存在本机，输入后即可使用。'), this.action(personalReady ? '更换个人密钥' : '保存个人密钥', async () => { const key = password.value.trim(); if (!/^sk-[A-Za-z0-9_-]{16,200}$/.test(key)) throw new Error('请输入有效的 API 密钥'); await this.options.setKey(key); password.value = ''; this.renderHistory(); this.notice('已改用个人 API'); }, 'primary'));
+    if (!personalReady && this.options.recoverKey) credentials.append(this.action('恢复 AI 连接', async () => {
+      await this.options.recoverKey(); if (generation !== this.generation) return;
+      this.renderHistory(); this.notice('AI 连接已恢复');
+    }));
     this.log.append(credentials);
     const footer = create('div', 'agent-settings-footer'); footer.append(this.action('完成', () => this.renderHistory(), 'primary'));
     this.log.append(create('p', 'agent-privacy-note', '只在你发起任务时，向所选服务发送完成任务所需的资料。'), footer); this.log.scrollTop = 0; this.root.scrollTop = 0;

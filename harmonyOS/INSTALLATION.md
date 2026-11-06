@@ -4,6 +4,10 @@
 
 **开发者模式 + 自己设备的调试签名 + 安装工具，三者都需要。** 下载的 `unsigned.hap` 不包含作者的签名或设备列表，不能直接点开安装，也不能仅开启开发者模式就安装。华为要求应用先签名，调试 Profile 与设备绑定，详见[应用签名要求](https://developer.huawei.com/consumer/cn/doc/harmonyos-guides-v5/experience-suggestions-security-debug-V5)及[申请调试 Profile](https://developer.huawei.com/consumer/cn/doc/doccenter-getting-started/agc-help-debug-profile-0000002248181278)。
 
+0.7.10/code37 的公开候选包为 `ZhiyunAssistant-HarmonyOS-0.7.10-unsigned.hap`，采用 release 构建且包内 `debug=false`，不含作者的调试签名或设备 Profile。请先核对发布资产的 SHA-256，再使用自己的合法签名材料；release 模式并不免除签名要求。任何本地设备绑定 debug signed HAP 仅供其授权设备测试，不应公开上传。
+
+原生真实认证属于明确手动同意的测试流程，不会因为安装新版、启动应用或存在已保存密码而自动启用；开启方式、许可失效和离线演练边界见 [NATIVE_CAS_PREFLIGHT.md](NATIVE_CAS_PREFLIGHT.md)。本轮没有执行设备安装或声称真实认证端到端验收完成，已有 code36 验收包与本轮公开 unsigned 包分别保留。
+
 ## 推荐：用 DevEco Studio 从源码安装
 
 1. 下载并完整解压仓库源码（或对应版本的鸿蒙源码包），安装[华为官方 DevEco Studio](https://developer.huawei.com/consumer/cn/deveco-studio/)，在 IDE 内安装支持 API 26 的 HarmonyOS SDK。

@@ -9,11 +9,21 @@ Android 手机、平板和折叠屏客户端。沿用智云助手现有学习页
 
 ## 安装
 
-在[安卓预览版](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/updates-2026.11-preview)下载 `ZhiyunAssistant-0.1.0-beta.6-Android.apk`，核对同一发布的 SHA256 后打开安装。适用于 Android 8.0 / API26 及以上，需 Android System WebView 100 或更新版本；不要求安装开发工具。安装确认由系统处理，不需要关闭系统安全防护。
+本次源码及待发布包为 `0.1.0-beta.7` / code 7。到[安卓预览版发布页](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/updates-2026.11-preview)查看实际已上传的附件；本文更新不表示新包已经上传。发布后请下载 `ZhiyunAssistant-0.1.0-beta.7-Android.apk`，核对同一发布的 SHA256 后打开安装。适用于 Android 8.0 / API26 及以上，需 Android System WebView 100 或更新版本；不要求安装开发工具。安装确认由系统处理，不需要关闭系统安全防护。
 
 一个 APK 可用于手机、Android 平板和折叠屏；代码不依赖 CPU 原生库。当前为预览版，实际验证范围见 [VERIFICATION.md](VERIFICATION.md)，功能对照见 [FEATURE_PARITY.md](FEATURE_PARITY.md)。
 
-首次阅读隐私说明，在浙江大学官方登录页面登录。应用不保存校园密码。明确退出登录才清除本机身份；断网保留身份，可以查看已有的离线课程。首次安装在断网状态下不能建立此前没有的校园登录。
+首次阅读隐私说明，在浙江大学官方登录页面手动登录，该网页入口不捕获或保存校园密码。原生账号保存及一次自动重登生产链已接通，但原生自动登录默认关闭，仍待线上端到端验收；每次创建应用页面实例时都重新关闭，不因安装新版本、恢复身份、打开设置或网页传入参数而启用。「隐私与数据 → 原生账号验收」只有在原生窗口逐项明确同意后，才执行一个私有 CAS 验证；身份核验通过后才由 AndroidKeyStore 加密保存凭据，密码不经过网页桥。之前已保存的原生同意只允许实际课堂 HTTP 401 时持久预留一次自动重登；成功、失败、重启均不恢复额度，网络错误和 403 不触发认证重试，验证码转手动。原生启用按钮本身不发 CAS POST，不恢复已耗用额度；旧 WebView 自动验证器仍禁用。
+
+开始手动登录会撤销保存账号并清除旧身份和会话；即使随后取消登录，也不会恢复。退出或切号会撤销原生凭据并清理旧版凭据与会话，失败时提示，不宣称清理成功；离线课程和笔记不受影响。断网保留已有身份，可以查看已有离线课程；首次安装断网时不能建立此前没有的校园登录。本次工程同步和构建未进行设备安装或真实网络认证。
+
+公开 APK 必须使用既有正式发行证书（SHA-256：`aa8632ac2a50e36214b77dee1dcd7029b56e8717dda020c40c334b73c1d750a8`）；脚本验签不符就停止。debug-key acceptance 包仅供单独本机验收，不得上传公开发行。历史本地 APK 同签名不能证明手机当前安装证书相同；若安装提示签名不兼容，不要卸载或清数据，应先核对当前安装证书与所用安装包。
+
+## 原生安全诊断（无需再认证）
+
+「隐私与数据 → 查看上次原生诊断」只读，不读取密码或 Cookie，不联网，也不要求先登录或授予新的账号保存同意。失败弹窗直接显示同一报告：固定阶段、异常类别、有效 HTTP 码、密码 POST「未开始 / 可能已发送 / 已响应」、操作编号和时间。报告仅在原生私有文件中原子保存，禁止拼接异常消息/原因、URL、令牌或账号；旧操作晚到和取消不能覆盖新操作报告。落盘失败明确显示 `FAILED / REPORT_WRITE_FAILED`，不会改变认证额度；进程中断的报告在重启时标为 `INTERRUPTED`。旧版本没有记录的失败无法事后恢复，本版不据此声称已找到认证失败原因。
+
+「匿名生产链预检（0 密码 POST）」还需原生窗口另行明确确认；不是打开隐私页就发请求。它复用生产 raw TLS、严格 HTTP/正则解析及全新私有 jar，只进行 GET 发现、表单、公钥、验证码和会话连续性检查。匿名传输没有 POST 能力，不读写凭据、不预留或恢复认证次数、不采用官方会话，也不开启自动登录；成功不能替代端到端认证验收。本次只运行注入 wire 的离线测试，没有实际联网执行该入口。
 
 ## 学习与窗口
 
@@ -50,10 +60,12 @@ npm ci
 npm run check
 npm test
 npm run build:web
-./gradlew :app:testDebugUnitTest :app:assembleRelease
+./gradlew :app:testDebugUnitTest :app:assembleDebugAndroidTest :app:lintRelease :app:assembleRelease
 ```
 
-输出未签名 APK 在 `app/build/outputs/apk/release/`，请用自己的发行密钥签名。密钥、密码、`local.properties` 和个人资料不要提交到仓库。作者本机签名脚本 `scripts/android-build.py` 从工程外的凭据文件读取自己的密钥，不包含发行私钥，普通用户可直接安装 Releases 中已签名的 APK。
+输出未签名 APK 在 `app/build/outputs/apk/release/`。自行构建分支可以使用自己的密钥，但不能覆盖官方发行包。密钥、密码、`local.properties` 和个人资料不要提交到仓库。官方本机签名脚本 `python3 scripts/android-build.py` 从工程外的凭据文件读取既有密钥，默认允许正常 TLS 下载构建依赖，不提供跳过 Release Lint 的选项；生成正式包前强制核验既有发行证书，不包含发行私钥。随后运行 `node scripts/package-audit.cjs dist/ZhiyunAssistant-0.1.0-beta.7-Android.apk`。普通用户直接安装 Releases 中已签名的 APK。
+
+离线构建使用 `--offline`（缓存必须完整，不跳过 Lint）。仅本项目既有验收环境可执行 `python3 scripts/android-build.py --offline --acceptance`：仍构建非 debuggable 的 release 代码，使用已知本机 debug keystore，并强制匹配既有 `ef7f41…` 验收证书；输出独立 `-Android-acceptance.apk`。不创建新 key，不卸载、不清数据、不安装；该验收包绝不能公开，正式包仍强制 `aa8632…`。
 
 界面测试：`npx playwright install chromium` 后运行 `npm run test:ui`。这些测试使用明确的合成资料，不获取用户课程和付费 AI。Android 原生仪器测试使用应用独立测试目录，不删除用户笔记、缓存或会话。
 

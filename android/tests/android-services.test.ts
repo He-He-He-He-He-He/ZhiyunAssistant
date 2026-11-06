@@ -20,6 +20,7 @@ import type { Course } from '../src/shared/model/Timeline';
 function harness() {
  const root = fs.mkdtempSync(nodePath.join(os.tmpdir(), 'zhiyun-android-')), cache = nodePath.join(root, 'cache'), temp = nodePath.join(cache, 'temp'); fs.mkdirSync(temp, { recursive: true });
  const secrets = new Map<string, string>(), registered = new Map<string, any>(), descriptorPaths = new Map<number, string>(), canceled: string[] = [], exports: Uint8Array[] = [], calls: Array<{ method: string; payload: any }> = [];
+ let custom: ((method: string, payload: any) => Promise<{ handled: boolean; value?: any }>) | undefined;
  let network = true, serial = 0, exportDelay: Promise<void> | undefined, exportEntered: (() => void) | undefined, zipDelay: Promise<void> | undefined, zipEntered: (() => void) | undefined, secretDelay: Promise<void> | undefined, secretEntered: (() => void) | undefined, streaming: ((payload: any) => any) | undefined;
  const target: any = {};
  const syncOperation = (method: string, p: any): any => {
@@ -48,6 +49,9 @@ function harness() {
  };
  const operation = async (method: string, p: any): Promise<any> => {
   calls.push({ method, payload: p });
+  const override = await custom?.(method, p); if (override?.handled) return override.value;
+  if (method === 'app.clearOfficialCredentials') { for (const alias of ['zhiyun-official-login-v2', 'zhiyun-official-login-v1', 'zhiyun-official-login-state-v1']) secrets.delete(alias); return true; }
+  if (method === 'app.revokeNativeCredentials' || method === 'app.cancelSilentLogin' || method === 'app.cancelLogin' || method === 'app.invalidateSession' || method === 'app.cleanupLoginProfiles' || method === 'app.checkLoginProfiles') return true;
   if (method === 'secret.get') return secrets.get(p.alias) || null;
   if (method === 'secret.set') { secretEntered?.(); if (secretDelay) await secretDelay; secrets.set(p.alias, p.value); return; }
   if (method === 'secret.remove') { secrets.delete(p.alias); return; }
@@ -68,12 +72,201 @@ function harness() {
  };
  target.NativeBridge = { sync(method: string, data: string) { try { return JSON.stringify({ value: syncOperation(method, JSON.parse(data)) }); } catch (error) { return JSON.stringify({ error: (error as Error).message }); } }, post(id: string, method: string, data: string) { void operation(method, JSON.parse(data)).then(value => target.__androidReceive({ id, value }), error => target.__androidReceive({ id, error: error.message })); } };
  (globalThis as any).window = target; const bridge = installNativeBridge(target);
- return { root, cache, temp, bridge, target, secrets, registered, canceled, exports, calls, setNetwork(value: boolean) { network = value; }, setStream(value: typeof streaming) { streaming = value; }, delayExport() { let release!: () => void; const entered = new Promise<void>(resolve => { exportEntered = resolve; }); exportDelay = new Promise<void>(resolve => { release = resolve; }); return { entered, release }; }, delayZip() { let release!: () => void; const entered = new Promise<void>(resolve => { zipEntered = resolve; }); zipDelay = new Promise<void>(resolve => { release = resolve; }); return { entered, release }; }, delaySecretSet() { let release!: () => void; const entered = new Promise<void>(resolve => { secretEntered = resolve; }); secretDelay = new Promise<void>(resolve => { release = resolve; }); return { entered, release }; }, event(name: string, value: any) { target.__androidEvent({ name, value }); }, dispose() { fs.rmSync(root, { recursive: true, force: true }); } };
+ return { root, cache, temp, bridge, target, secrets, registered, canceled, exports, calls, setHandler(value: typeof custom) { custom = value; }, setNetwork(value: boolean) { network = value; }, setStream(value: typeof streaming) { streaming = value; }, delayExport() { let release!: () => void; const entered = new Promise<void>(resolve => { exportEntered = resolve; }); exportDelay = new Promise<void>(resolve => { release = resolve; }); return { entered, release }; }, delayZip() { let release!: () => void; const entered = new Promise<void>(resolve => { zipEntered = resolve; }); zipDelay = new Promise<void>(resolve => { release = resolve; }); return { entered, release }; }, delaySecretSet() { let release!: () => void; const entered = new Promise<void>(resolve => { secretEntered = resolve; }); secretDelay = new Promise<void>(resolve => { release = resolve; }); return { entered, release }; }, event(name: string, value: any) { target.__androidEvent({ name, value }); }, dispose() { fs.rmSync(root, { recursive: true, force: true }); } };
 }
 const course: Course = { subId: 'lecture-1', courseId: 'course-1', title: 'Example', teacher: 'Teacher', room: 'Room', status: '3', start: 1000, end: 4600 };
 
+test('manual login clears old credentials and never saves unverified capture', async () => {
+ const h = harness(); try { h.secrets.set('zhiyun-official-login-v1', JSON.stringify({ username: 'old', password: 'old-secret' })); h.setHandler(async (method) => method === 'app.login' ? { handled: true, value: { username: 'old', password: 'wrong-secret' } } : { handled: false }); installAndroidServices(); const account = await h.target.zhiyun.call('login.open'); assert.equal(account.id, 'test-student'); assert.equal(h.secrets.has('zhiyun-official-login-v1'), false); assert.equal(h.secrets.has('zhiyun-official-login-v2'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('renderer cannot save even a forged verified result', async () => {
+ const h = harness(); try { installAndroidServices(); h.setHandler(async method => method === 'app.login' ? { handled: true, value: { verified: true, username: 'synthetic-user', password: 'synthetic-password', accountId: 'test-student' } } : { handled: false }); assert.equal((await h.target.zhiyun.call('login.open')).id, 'test-student'); assert.equal(h.secrets.has('zhiyun-official-login-v2'), false); assert.equal(h.calls.some(c => c.method === 'secret.set' && c.payload.alias === 'zhiyun-official-login-v2'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('forged capture never causes credential writes regardless of identity', async () => {
+ for (const params of [{ id: 'different', account: 'synthetic-user' }, { id: 'test-student', account: 'different' }, { id: 'test-student' }]) { const h = harness(); try { installAndroidServices(); h.setHandler(async method => { if (method === 'app.login') return { handled: true, value: { verified: true, username: 'synthetic-user', password: 'synthetic-password', accountId: 'test-student' } }; if (method === 'http.request') return { handled: true, value: { status: 200, headers: {}, base64: false, body: JSON.stringify({ params }) } }; return { handled: false }; }); await h.target.zhiyun.call('login.open'); assert.equal(h.secrets.has('zhiyun-official-login-v2'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); } }
+});
+test('manual login never writes a password record', async () => {
+ const h = harness(); try { installAndroidServices(); h.setHandler(async method => method === 'app.login' ? { handled: true, value: { verified: true, password: 'synthetic-password' } } : { handled: false }); await h.target.zhiyun.call('login.open'); assert.equal(h.calls.some(c => c.method === 'secret.set' && c.payload.alias.startsWith('zhiyun-official-login-')), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('logout tombstone precedes cleanup, failures still clear session, and manual login does not tombstone', async () => {
+ const h = harness(); try {
+  installAndroidServices();
+  h.setHandler(async method => { if (method === 'app.revokeNativeCredentials') throw new Error('自动登录凭据撤销未确认，请重试退出；手动登录仍可用'); if (method === 'app.login') return { handled: true, value: {} }; return { handled: false }; });
+  await assert.rejects(h.target.zhiyun.call('session.logout'), (error: any) => /撤销未确认/.test(error.message) && error.sessionCleared === true);
+  const names = h.calls.map(c => c.method);
+  assert.ok(names.indexOf('app.invalidateSession') < names.indexOf('app.revokeNativeCredentials'));
+  assert.ok(names.indexOf('app.revokeNativeCredentials') < names.indexOf('app.cancelLogin'));
+  assert.ok(names.indexOf('app.revokeNativeCredentials') < names.indexOf('cookies.clear'));
+  const before = names.filter(n => n === 'app.revokeNativeCredentials').length;
+  assert.equal((await h.target.zhiyun.call('login.open')).id, 'test-student');
+  assert.equal(h.calls.filter(c => c.method === 'app.revokeNativeCredentials').length, before);
+  await h.target.__zhiyunDispose();
+ } finally { h.dispose(); }
+});
+
+test('logout clears old official credentials via dedicated native operation', async () => {
+ const h = harness(); try { h.secrets.set('zhiyun-official-login-v2', 'synthetic'); installAndroidServices(); await h.target.zhiyun.call('session.logout'); assert.equal(h.secrets.has('zhiyun-official-login-v2'), false); assert.ok(h.calls.some(c => c.method === 'app.clearOfficialCredentials')); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('restore never retrieves password or invokes silent login', async () => {
+ const h = harness(); try { h.secrets.set('zhiyun-official-login-v2', 'synthetic'); installAndroidServices(); await h.target.zhiyun.call('session.restore'); assert.equal(h.calls.some(c => c.method === 'app.silentLogin' || c.method === 'secret.get' && c.payload.alias === 'zhiyun-official-login-v2'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('manual login invalidates old session and clears cookies before opening', async () => {
+ const h = harness(); try { installAndroidServices(); h.setHandler(async method => method === 'app.login' ? { handled: true, value: {} } : { handled: false }); await h.target.zhiyun.call('login.open'); const names = h.calls.map(c => c.method); assert.ok(names.indexOf('app.invalidateSession') < names.indexOf('cookies.clear')); assert.ok(names.indexOf('cookies.clear') < names.indexOf('app.login')); assert.equal(names.includes('app.cleanupLoginProfiles'), false); assert.equal(names.includes('app.checkLoginProfiles'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('cancelled manual login does not restore cleared prior session', async () => {
+ const h = harness(); try { installAndroidServices(); await h.target.zhiyun.call('session.account'); assert.ok(h.secrets.has('zhiyun-last-account-v1')); h.setHandler(async method => method === 'app.login' ? {handled: true, value: {cancelled: true}} : {handled: false}); assert.equal(await h.target.zhiyun.call('login.open'), null); assert.equal(h.secrets.has('zhiyun-last-account-v1'), false); assert.equal(await h.target.zhiyun.call('session.restore'), null); assert.ok(h.calls.some(c => c.method === 'cookies.clear')); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('privacy describes native explicit consent, default-off rollout and cancellation limitation', () => {
+ const renderer = fs.readFileSync('src/renderer/App.tsx', 'utf8'), readme = fs.readFileSync('README.md', 'utf8');
+ assert.match(renderer, /自动重登默认关闭/); assert.match(renderer, /取消也不会恢复/); assert.match(renderer, /取消后无法恢复/);
+ assert.match(renderer, /密码不经过网页桥/); assert.match(renderer, /成功、失败、重启都不恢复/);
+ assert.match(readme, /原生自动登录默认关闭/); assert.match(readme, /即使随后取消登录，也不会恢复/);
+ assert.doesNotMatch(renderer, /验证账号与当前账号一致后，使用系统密钥加密保存以便自动登录/);
+});
+test('logout reports unknown isolated residue while clearing ordinary session and preserving marker', async () => {
+ const h = harness(), marker = new Set(['zhiyun-verify-synthetic']); try { installAndroidServices(); h.setHandler(async method => { if (method === 'app.checkLoginProfiles' && marker.size) throw new Error('unknown profile'); return { handled: false }; }); const result = await h.target.zhiyun.call('session.logout'); assert.match(result.warning, /尚未确认清理/); assert.match(result.warning, /未删除隔离数据/); assert.deepEqual([...marker], ['zhiyun-verify-synthetic']); assert.ok(h.calls.some(c => c.method === 'cookies.clear')); assert.equal(h.calls.some(c => c.method === 'app.cleanupLoginProfiles'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('unknown profile marker does not block manual login or start verification', async () => {
+ const h = harness(), marker = new Set(['zhiyun-verify-synthetic']); try { installAndroidServices(); h.setHandler(async method => { if (method === 'app.checkLoginProfiles' || method === 'app.cleanupLoginProfiles') throw new Error('unknown profile'); if (method === 'app.login') return { handled: true, value: {} }; return { handled: false }; }); assert.equal((await h.target.zhiyun.call('login.open')).id, 'test-student'); assert.deepEqual([...marker], ['zhiyun-verify-synthetic']); assert.equal(h.calls.some(c => ['app.cleanupLoginProfiles', 'app.checkLoginProfiles', 'app.silentLogin'].includes(c.method)), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('profile warning after logout does not block a later manual login', async () => {
+ const h = harness(); try { installAndroidServices(); h.setHandler(async method => { if (method === 'app.checkLoginProfiles') throw new Error('unknown profile'); if (method === 'app.login') return { handled: true, value: {} }; return { handled: false }; }); const result = await h.target.zhiyun.call('session.logout'); assert.match(result.warning, /未确认清理/); assert.equal((await h.target.zhiyun.call('login.open')).id, 'test-student'); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('manual login queued during warning-producing logout can continue', async () => {
+ const h = harness(); let entered!: () => void, release!: () => void; const started = new Promise<void>(r => entered = r), gate = new Promise<void>(r => release = r);
+ try { installAndroidServices(); h.setHandler(async method => { if (method === 'app.checkLoginProfiles') { entered(); await gate; throw new Error('unknown profile'); } if (method === 'app.login') return { handled: true, value: {} }; return { handled: false }; }); const logout = h.target.zhiyun.call('session.logout'); await started; const login = h.target.zhiyun.call('login.open'); release(); assert.match((await logout).warning, /未确认清理/); assert.equal((await login).id, 'test-student'); assert.equal(h.calls.some(c => c.method === 'app.cleanupLoginProfiles' || c.method === 'app.silentLogin'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('profile warning does not hide other logout failure', async () => {
+ const h = harness(); try { installAndroidServices(); h.setHandler(async method => { if (method === 'app.checkLoginProfiles') throw new Error('unknown profile'); if (method === 'app.clearOfficialCredentials') throw new Error('删除自动登录凭据失败'); return { handled: false }; }); await assert.rejects(h.target.zhiyun.call('session.logout'), /删除自动登录凭据失败.*隔离登录残留未确认清理/); assert.ok(h.calls.some(c => c.method === 'cookies.clear')); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('offline session restore does not inspect or mutate isolated markers', async () => {
+ const h = harness(); let services = createServices(createAndroidSession(h.cache), h.root, () => {}); try { await services.handle('session.account'); await services.dispose(); h.setNetwork(false); installAndroidServices(); h.setHandler(async method => { if (method === 'app.checkLoginProfiles' || method === 'app.cleanupLoginProfiles') throw new Error('unknown profile'); return { handled: false }; }); const restored = await h.target.zhiyun.call('session.restore'); assert.equal(restored.id, 'test-student'); assert.equal(restored.offline, true); assert.equal(h.calls.some(c => c.method === 'app.checkLoginProfiles' || c.method === 'app.cleanupLoginProfiles'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('credential deletion failure blocks manual login and is reported on logout', async () => {
+ const h = harness(); try { installAndroidServices(); h.secrets.set('zhiyun-official-login-v1', 'synthetic old password'); h.setHandler(async (method) => { if (method === 'app.clearOfficialCredentials') throw new Error('删除自动登录凭据失败'); return { handled: false }; }); await assert.rejects(h.target.zhiyun.call('login.open'), /删除自动登录凭据失败/); assert.equal(h.calls.some(c => c.method === 'app.login'), false); await assert.rejects(h.target.zhiyun.call('session.logout'), /删除自动登录凭据失败/); assert.ok(h.calls.some(c => c.method === 'cookies.clear')); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('legacy credential does not trigger a silent WebView', async () => {
+ const h = harness(); try { installAndroidServices(); h.secrets.set('zhiyun-official-login-v2', 'synthetic'); await h.target.zhiyun.call('session.restore'); assert.equal(h.calls.some(c => c.method === 'app.silentLogin'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('logout still invalidates the session and clears legacy credentials', async () => {
+ const h = harness(); try { installAndroidServices(); h.secrets.set('zhiyun-official-login-v2', 'synthetic'); await h.target.zhiyun.call('session.logout'); assert.equal(h.secrets.has('zhiyun-official-login-v2'), false); assert.ok(h.calls.some(c => c.method === 'app.invalidateSession')); assert.ok(h.calls.some(c => c.method === 'app.cancelSilentLogin')); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('logout cancels an in-flight manual verification before clearing credentials', async () => {
+ const h = harness(); let entered!: () => void, release!: () => void; const started = new Promise<void>(r => entered = r), canceled = new Promise<void>(r => release = r);
+ try { installAndroidServices(); h.setHandler(async method => { if (method === 'app.login') { entered(); await canceled; return { handled: true, value: { verified: true, username: 'fixture', password: 'secret', accountId: 'test-student' } }; } if (method === 'app.cancelLogin') { release(); return { handled: true, value: true }; } return { handled: false }; }); const login = h.target.zhiyun.call('login.open'); await started; const logout = h.target.zhiyun.call('session.logout'); assert.equal(await login, null); await logout; assert.equal(h.secrets.has('zhiyun-official-login-v2'), false); assert.ok(h.calls.some(c => c.method === 'app.cancelLogin')); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('session restore does not submit credentials', async () => {
+ const h = harness(); try { installAndroidServices(); h.secrets.set('zhiyun-official-login-v2', 'synthetic'); await h.target.zhiyun.call('session.restore'); assert.equal(h.calls.some(c => c.method === 'app.silentLogin'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+test('old mismatched account cannot trigger silent authentication', async () => {
+ const h = harness(); try { installAndroidServices(); h.secrets.set('zhiyun-official-login-v2', JSON.stringify({username:'fixture', password:'secret', accountId:'other-id'})); await h.target.zhiyun.call('session.restore'); assert.equal(h.calls.some(c => c.method === 'app.silentLogin'), false); await h.target.__zhiyunDispose(); } finally { h.dispose(); }
+});
+
+test('legacy WebView verifier stays disabled while native CAS handles only real401 consented login', () => {
+ const verifier = fs.readFileSync('app/src/main/java/cn/suike/slides/android/CredentialVerifier.java', 'utf8');
+ assert.doesNotMatch(verifier, /evaluateJavascript\s*\(/);
+ assert.doesNotMatch(verifier, /getKaptchaStatus|\.click\(\)|"checking"\.equals\(result\)/);
+ const bridge = fs.readFileSync('app/src/main/java/cn/suike/slides/android/NativeIO.java', 'utf8');
+ assert.match(bridge, /silentLoginAfter401\(loginPermit\)/);
+ assert.match(bridge, /data\.put\("_nativeLoginPermit",nativeLogin==null\?-1:nativeLogin\.generation\(\)\)/);
+ assert.match(bridge, /permit!=nativeLogin\.generation\(\)/);
+ assert.match(bridge, /cancelNativeLogin\(\) \{ unauthorizedGeneration=-1;/);
+ assert.match(bridge, /unauthorizedGeneration!=instanceGeneration/);
+ assert.match(bridge, /NativeCasPrototype::newExplicitlyAuthorizedTransport/);
+ assert.match(bridge, /method\.equals\("app\.cleanupLoginProfiles"\)\) throw new IOException/);
+ const renderer = fs.readFileSync('src/renderer/App.tsx', 'utf8');
+ assert.match(renderer, /if\(result\?\.warning\)show\(result\.warning\)/);
+});
+test('native acceptance is startup-off and its manual entry copy distinguishes opt-in verification', () => {
+ const bridge=fs.readFileSync('app/src/main/java/cn/suike/slides/android/NativeIO.java','utf8');
+ const activity=fs.readFileSync('app/src/main/java/cn/suike/slides/android/MainActivity.java','utf8');
+ const manual=fs.readFileSync('app/src/main/java/cn/suike/slides/android/OfficialLoginActivity.java','utf8');
+ assert.match(bridge,/private volatile boolean nativeValidationEnabled;/);
+ assert.match(bridge,/!nativeForeground \|\| !nativeValidationEnabled \|\| unauthorizedGeneration!=instanceGeneration/);
+ assert.match(activity,/原生账号验收（启动时默认关闭）/);
+ assert.match(activity,/本次由你本人逐项明确同意后/);
+ assert.match(activity,/此按钮本身不发送 CAS POST/);
+ assert.match(manual,/本官方页面不捕获或保存密码，也不会自动提交/);
+ assert.doesNotMatch(manual,/自动登录暂不可用/);
+});
+test('public Release signing refuses acceptance keys and does not skip release lint', () => {
+ const script=fs.readFileSync('scripts/android-build.py','utf8');
+ assert.match(script,/if kind == 'release' and actual != 'aa8632ac2a50e36214b77dee1dcd7029b56e8717dda020c40c334b73c1d750a8'/);
+ assert.match(script,/Public Release must use the established production certificate/);
+ assert.doesNotMatch(script,/skip-release-lint|lintVitalRelease/);
+ assert.match(script,/--ks-pass','env:ZHIYUN_KEYSTORE_PASSWORD'/);
+});
+test('native report and anonymous preflight routes discard all renderer protocol and consent data', async () => {
+ const h=harness(); try {
+  h.setHandler(async method=>method==='app.viewNativeDiagnostics'||method==='app.nativeAnonymousPreflight'?{handled:true,value:false}:{handled:false});
+  installAndroidServices();
+  for(const method of ['app.viewNativeDiagnostics','app.nativeAnonymousPreflight']) {
+   await h.target.zhiyun.call(method,{password:'synthetic-canary',consent:true,url:'https://invalid.example/'});
+   assert.deepEqual(h.calls.find(c=>c.method===method)?.payload,{});
+  }
+  assert.equal(h.calls.some(c=>c.method==='app.silentLogin'||c.method==='app.login'||c.method==='http.request'),false);
+  await h.target.__zhiyunDispose();
+ } finally { h.dispose(); }
+});
+test('privacy diagnostics are read only and anonymous network needs a native positive button', () => {
+ const view=fs.readFileSync('src/renderer/NativeDiagnostics.tsx','utf8');
+ const activity=fs.readFileSync('app/src/main/java/cn/suike/slides/android/MainActivity.java','utf8');
+ assert.match(view,/查看上次原生诊断/); assert.match(view,/0 密码 POST/);
+ assert.doesNotMatch(view,/useEffect|fetch\(|XMLHttpRequest|error\.message/);
+ assert.match(activity,/setPositiveButton\("仅运行匿名预检"/);
+ assert.match(activity,/io\.nativeDiagnosticReport\(\)/);
+ assert.match(activity,/不读取保存密码、不提交密码、不预留或恢复认证额度，不开启自动登录/);
+});
+test('acceptance signing has a separate filename, fixed device certificate and non-debuggable release guard', () => {
+ const script=fs.readFileSync('scripts/android-build.py','utf8');
+ assert.match(script,/ef7f41fb43f810a9eefa34848f3801c20f97554b1682abd546c99788d9d6b08b/);
+ assert.match(script,/'-acceptance' if args\.acceptance/);
+ assert.match(script,/Release\/acceptance APK must not be debuggable/);
+ assert.match(script,/if args\.acceptance and \(args\.debug or args\.unsigned or args\.instrumentation\)/);
+});
 test('bridge propagates native errors and unsubscribed events do not fire', async () => {
  const h = harness(); try { await assert.rejects(h.bridge.call('unknown'), /unsupported async/); assert.throws(() => h.bridge.sync('unknown'), /unsupported sync/); let count = 0; const off = h.bridge.on('test', () => count++); h.event('test', {}); off(); h.event('test', {}); assert.equal(count, 1); } finally { h.dispose(); }
+});
+test('native account settings discard renderer credential and consent payload and refresh only after adoption', async () => {
+ const h=harness(); try {
+  h.setHandler(async method => method==='app.nativeAccountSettings'?{handled:true,value:true}:{handled:false});
+  installAndroidServices(); const events:any[]=[]; h.target.zhiyun.on('session',(value:any)=>events.push(value));
+  assert.equal(await h.target.zhiyun.call('app.nativeAccountSettings',{username:'forged',password:'never-forward',consent:true}),true);
+  const native=h.calls.find(c=>c.method==='app.nativeAccountSettings'); assert.deepEqual(native?.payload,{});
+  assert.equal(events.length,1); assert.equal(events[0].id,'test-student');
+  assert.equal(h.calls.some(c=>c.method==='app.silentLogin'),false);
+  await h.target.__zhiyunDispose();
+ } finally { h.dispose(); }
+});
+test('cancelled native consent dialog cannot refresh identity or save credentials', async () => {
+ const h=harness(); try {
+  h.setHandler(async method => method==='app.nativeAccountSettings'?{handled:true,value:false}:{handled:false});
+  installAndroidServices(); assert.equal(await h.target.zhiyun.call('app.nativeAccountSettings'),false);
+  assert.equal(h.calls.some(c=>c.method==='http.request'||c.method==='secret.set'),false);
+  await h.target.__zhiyunDispose();
+ } finally { h.dispose(); }
+});
+test('late native success after logout cannot publish or query an account', async () => {
+ const h=harness(); let entered!:()=>void,release!:()=>void;
+ const started=new Promise<void>(r=>entered=r),hold=new Promise<void>(r=>release=r);
+ try {
+  h.setHandler(async method=>{if(method==='app.nativeAccountSettings'){entered();await hold;return{handled:true,value:true};}return{handled:false};});
+  installAndroidServices();let published=0;h.target.zhiyun.on('session',()=>published++);
+  const pending=h.target.zhiyun.call('app.nativeAccountSettings');await started;
+  await h.target.zhiyun.call('session.logout');release();await pending;
+  assert.equal(published,0);assert.equal(h.calls.some(c=>c.method==='http.request'),false);
+  await h.target.__zhiyunDispose();
+ } finally { release?.();h.dispose(); }
+});
+test('HTTP403 and network errors never ask JavaScript to initiate automatic authentication', async () => {
+ for(const status of [403,0]) {
+  const h=harness(); try {
+   h.setHandler(async method=>{if(method==='http.request'){if(status===0)throw new Error('offline');return{handled:true,value:{status,headers:{},body:'{}'}};}return{handled:false};});
+   installAndroidServices();await assert.rejects(h.target.zhiyun.call('session.account'));
+   assert.equal(h.calls.some(c=>c.method==='app.silentLogin'||c.method==='app.nativeAccountSettings'),false);
+   await h.target.__zhiyunDispose();
+  } finally {h.dispose();}
+ }
 });
 test('Android descriptors preserve append, truncate, utf8 and chunked binary round trips', () => {
  const h = harness(); try { const file = nodePath.join(h.root, 'chunks.bin'), a = fileIo.openSync(file, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.TRUNC); const expected = Buffer.alloc(700 * 1024, 133); assert.equal(fileIo.writeSync(a.fd, expected), expected.length); fileIo.closeSync(a); const reader = fileIo.openSync(file); const actual = new ArrayBuffer(expected.length); assert.equal(fileIo.readSync(reader.fd, actual), expected.length); assert.deepEqual(Buffer.from(actual), expected); fileIo.closeSync(reader); const append = fileIo.openSync(file, fileIo.OpenMode.WRITE_ONLY | fileIo.OpenMode.APPEND); fileIo.truncateSync(append.fd, 0); fileIo.writeSync(append.fd, '课堂笔记 123'); fileIo.closeSync(append); assert.equal(fileIo.readTextSync(file), '课堂笔记 123'); } finally { h.dispose(); }

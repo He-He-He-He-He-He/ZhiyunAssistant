@@ -11,12 +11,12 @@
 
 | 设备 | 当前版本 | 下载 | 安装前须知 |
 | :--- | :--- | :--- | :--- |
-| **macOS** | 1.8.8 | [下载 Mac 版 DMG](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/updates-2026.11-preview/ZhiyunAssistant-Mac-1.8.8.dmg) | macOS 13 及以上，支持 Apple 芯片和 Intel；目前未经 Apple 开发者签名及公证。首次打开若被系统阻止，请前往 **系统设置 → 隐私与安全性 → 仍要打开**，再按提示确认。[详细步骤](macOS/README.md#首次安装) |
-| **Android** | 0.1.0-beta.6 | [下载 Android APK](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/updates-2026.11-preview/ZhiyunAssistant-0.1.0-beta.6-Android.apk) | Android 8.0 及以上，支持手机、平板；需较新的 Android System WebView。 |
-| **HarmonyOS** | 0.7.9 | [下载未签名 HAP](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/updates-2026.11-preview/ZhiyunAssistant-HarmonyOS-0.7.9-unsigned.hap) | **不能直接安装**：需要 DevEco Studio 和适用于自己设备的调试签名。[详细步骤](harmonyOS/INSTALLATION.md) |
-| **Windows** | 0.8.0-beta.3 | [下载 x64 ZIP](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/updates-2026.11-preview/ZhiyunAssistant-Windows-0.8.0-beta.3-x64.zip) · [下载 ARM64 ZIP](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/updates-2026.11-preview/ZhiyunAssistant-Windows-0.8.0-beta.3-arm64.zip) | Windows 10/11 64 位；ZIP 解压后运行，当前包未签署 Windows 发布者证书。 |
+| **macOS** | 1.8.9 | [下载 Mac 版 DMG](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/fixes-2026.11.06-preview/ZhiyunAssistant-Mac-1.8.9.dmg) | macOS 13 及以上，支持 Apple 芯片和 Intel；目前未经 Apple 开发者签名及公证。首次打开若被系统阻止，请前往 **系统设置 → 隐私与安全性 → 仍要打开**，再按提示确认。[详细步骤](macOS/README.md#首次安装) |
+| **Android** | 0.1.0-beta.7 | [下载 Android APK](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/fixes-2026.11.06-preview/ZhiyunAssistant-0.1.0-beta.7-Android.apk) | Android 8.0 及以上，支持手机、平板；需较新的 Android System WebView。 |
+| **HarmonyOS** | 0.7.10 | [下载未签名 HAP](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/fixes-2026.11.06-preview/ZhiyunAssistant-HarmonyOS-0.7.10-unsigned.hap) | **不能直接安装**：需要 DevEco Studio 和适用于自己设备的调试签名。[详细步骤](harmonyOS/INSTALLATION.md) |
+| **Windows** | 0.8.0-beta.4 | [下载 x64 ZIP](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/fixes-2026.11.06-preview/ZhiyunAssistant-0.8.0-beta.4-Windows-x64.zip) · [下载 ARM64 ZIP](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/download/fixes-2026.11.06-preview/ZhiyunAssistant-0.8.0-beta.4-Windows-arm64.zip) | Windows 10/11 64 位；ZIP 解压后运行，当前包未签署 Windows 发布者证书。 |
 
-[查看完整发布说明与 SHA-256 校验值](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/updates-2026.11-preview) · [查看所有历史版本](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases)
+[查看完整发布说明与 SHA-256 校验值](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases/tag/fixes-2026.11.06-preview) · [查看所有历史版本](https://github.com/He-He-He-He-He-He/ZhiyunAssistant/releases)
 
 ## 开始使用
 

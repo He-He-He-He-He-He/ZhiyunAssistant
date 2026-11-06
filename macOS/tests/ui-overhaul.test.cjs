@@ -55,7 +55,7 @@ test('background operations read notes and clear caches without navigating',asyn
 test('privacy opens as a compact sheet with the external agent setup',async t=>{
  const{r,app,doc}=await start(t,['privacy']);app.privacy();
  assert.equal(doc.querySelector('#modalTitle').textContent,'隐私与数据');assert.ok(doc.querySelector('.modal-shell').classList.contains('compact'));
- assert.equal(doc.querySelectorAll('.privacy-grid > .privacy-card').length,4);assert.ok(doc.querySelector('.privacy-page > .privacy-agent-card'));assert.match(doc.querySelector('.privacy-page').textContent,/不保存密码.*加密快照.*API 费用.*断网不会自动退出登录.*连接 AI 工具/s);
+ assert.equal(doc.querySelectorAll('.privacy-grid > .privacy-card').length,4);assert.ok(doc.querySelector('.privacy-page > .privacy-agent-card'));assert.match(doc.querySelector('.privacy-page').textContent,/不保存新校园密码.*不会自动填写或提交密码.*加密快照.*API 费用.*断网不会自动退出登录.*连接 AI 工具/s);
  const box=doc.querySelector('.privacy-agent-card');assert.ok(!/Codex|DeepSeek Harness/.test(box.textContent));assert.match(box.textContent,/AI 帮你装/);
  [...box.querySelectorAll('button')].find(b=>b.textContent==='AI 帮你装').click();await wait();const copy=r.calls.find(([name])=>name==='copy');assert.match(copy[1].text,/MCP.*\/usr\/bin\/python3/);assert.match(copy[1].text,/不支持 MCP/);
  const toggle=[...box.querySelectorAll('button')].find(b=>b.textContent==='开启接口');toggle.click();await wait();assert.equal(toggle.textContent,'关闭接口');assert.equal(box.querySelector('#external-agent-status').textContent,'接口已开启');assert.ok(r.calls.some(([name,args])=>name==='externalAgentEnable'&&args.enabled));toggle.click();await wait();assert.equal(toggle.textContent,'开启接口');

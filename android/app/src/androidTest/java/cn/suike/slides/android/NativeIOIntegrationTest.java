@@ -35,7 +35,7 @@ import static org.junit.Assert.*;
 @RunWith(AndroidJUnit4.class)
 public class NativeIOIntegrationTest {
     private static final class TestHost implements NativeIO.Host {
-        MainActivity activity; WebView view;
+        MainActivity activity; WebView view; File fixtureRoot;
         final Map<String, CompletableFuture<Object>> responses = new ConcurrentHashMap<>();
         @Override public void respond(String id, Object value, String error) {
             CompletableFuture<Object> result = responses.remove(id); if (result == null) return;
@@ -44,7 +44,7 @@ public class NativeIOIntegrationTest {
         @Override public void event(String name, Object value) {}
         @Override public CompletableFuture<String> pickImage() { return CompletableFuture.completedFuture(null); }
         @Override public CompletableFuture<String> exportFile(String path, String name) { return CompletableFuture.completedFuture(null); }
-        @Override public CompletableFuture<Void> login() { return CompletableFuture.completedFuture(null); }
+        @Override public CompletableFuture<org.json.JSONObject> login() { return CompletableFuture.completedFuture(new org.json.JSONObject()); }
         @Override public void fullscreen(boolean enabled) {}
         @Override public void openExternal(String url) {}
         Object call(NativeIO io, String method, JSONObject payload) throws Exception {
@@ -56,12 +56,16 @@ public class NativeIOIntegrationTest {
     private void test(TestBody body) throws Exception {
         AtomicReference<NativeIO> nativeIo = new AtomicReference<>(); TestHost host = new TestHost();
         try (ActivityScenario<MainActivity> scenario = ActivityScenario.launch(MainActivity.class)) {
-            scenario.onActivity(activity -> { try { host.activity=activity;host.view=new WebView(activity);nativeIo.set(new NativeIO(activity,host.view,host)); } catch (Exception error) { throw new RuntimeException(error); } });
+            scenario.onActivity(activity -> { try {
+                host.activity = activity; host.fixtureRoot = new File(activity.getCacheDir(), "native-integration-" + UUID.randomUUID());
+                if (!host.fixtureRoot.mkdir()) throw new IllegalStateException("cannot create fixture root");
+                host.view = new WebView(activity); nativeIo.set(new NativeIO(activity, host.view, host, host.fixtureRoot));
+            } catch (Exception error) { throw new RuntimeException(error); } });
             NativeIO io = nativeIo.get(); JSONObject paths = new JSONObject(io.sync("app.paths", "{}")).getJSONObject("value");
             File folder = new File(paths.getString("cacheDir"), "native-test-" + UUID.randomUUID());
-            io.sync("fs.mkdir", new JSONObject().put("path", folder.getPath()).put("recursive", true).toString());
+            assertFalse(new JSONObject(io.sync("fs.mkdir", new JSONObject().put("path", folder.getPath()).put("recursive", true).toString())).has("error"));
             try { body.run(io, host, folder); }
-            finally { io.sync("fs.remove", new JSONObject().put("path", folder.getPath()).put("recursive", true).toString()); io.close();scenario.onActivity(activity -> host.view.destroy()); }
+            finally { io.close(); scenario.onActivity(activity -> host.view.destroy()); deleteFixture(host.fixtureRoot); }
         }
     }
     @Test public void localVideoRangesAndRevocation() throws Exception {
@@ -123,19 +127,92 @@ public class NativeIOIntegrationTest {
             assertFalse(hls.contains(folder.getPath()));
         });
     }
-    @Test public void aesSecretsAreNotReachableThroughFileBridge() throws Exception {
+    @Test public void encryptedSecretRoundTripAndFileBridgeIsolation() throws Exception {
         test((io, host, folder) -> {
-            String alias = "native-integration-" + UUID.randomUUID(); String marker = "not-a-real-credential-" + UUID.randomUUID();
+            String alias = "zhiyun-last-account-v1", fixture = "synthetic-fixture-" + UUID.randomUUID();
+            JSONObject query = new JSONObject().put("alias", alias);
+            assertEquals(JSONObject.NULL, host.call(io, "secret.get", query));
+            host.call(io, "secret.set", new JSONObject().put("alias", alias).put("value", fixture));
+            assertEquals(fixture, host.call(io, "secret.get", query));
+            File[] encrypted = new File(host.fixtureRoot, "secrets").listFiles();
+            assertNotNull(encrypted); assertEquals(1, encrypted.length);
+            byte[] first = Files.readAllBytes(encrypted[0].toPath());
+            assertFalse(new String(first, StandardCharsets.ISO_8859_1).contains(fixture));
+            host.call(io, "secret.set", new JSONObject().put("alias", alias).put("value", fixture));
+            assertFalse(java.util.Arrays.equals(first, Files.readAllBytes(encrypted[0].toPath())));
+            assertEquals(fixture, host.call(io, "secret.get", query));
+            for (String forbidden : new String[]{encrypted[0].getPath(), new File(folder, "../../secrets/" + encrypted[0].getName()).getPath()}) {
+                assertTrue(new JSONObject(io.sync("fs.readBytes", new JSONObject().put("path", forbidden).toString())).has("error"));
+                assertTrue(new JSONObject(io.sync("fs.open", new JSONObject().put("path", forbidden).put("flags", 0).toString())).has("error"));
+            }
+            File link = new File(folder, "secret-link");
+            android.system.Os.symlink(encrypted[0].getAbsolutePath(), link.getAbsolutePath());
+            assertTrue(new JSONObject(io.sync("fs.readBytes", new JSONObject().put("path", link.getPath()).toString())).has("error"));
+            host.call(io, "secret.remove", query);
+            assertEquals(JSONObject.NULL, host.call(io, "secret.get", query));
+            assertFalse(encrypted[0].exists());
+        });
+    }
+    @Test public void fileBridgeRoundTripAndDescriptorGuards() throws Exception {
+        test((io, host, folder) -> {
+            File file = new File(folder, "synthetic.bin"); byte[] bytes = new byte[]{0, 1, 2, (byte)255};
+            int writeFd = new JSONObject(io.sync("fs.open", new JSONObject().put("path", file.getPath()).put("flags", 1 | 64 | 512).toString())).getJSONObject("value").getInt("fd");
+            assertEquals(bytes.length, new JSONObject(io.sync("fs.write", new JSONObject().put("fd", writeFd).put("base64", Base64.encodeToString(bytes, Base64.NO_WRAP)).toString())).getInt("value"));
+            assertFalse(new JSONObject(io.sync("fs.close", new JSONObject().put("fd", writeFd).toString())).has("error"));
+            assertTrue(new JSONObject(io.sync("fs.write", new JSONObject().put("fd", writeFd).put("base64", "AA==").toString())).has("error"));
+            int readFd = new JSONObject(io.sync("fs.open", new JSONObject().put("path", file.getPath()).put("flags", 0).toString())).getJSONObject("value").getInt("fd");
+            assertTrue(new JSONObject(io.sync("fs.write", new JSONObject().put("fd", readFd).put("base64", "AA==").toString())).has("error"));
+            String result = new JSONObject(io.sync("fs.read", new JSONObject().put("fd", readFd).put("length", bytes.length).toString())).getString("value");
+            assertArrayEquals(bytes, Base64.decode(result, Base64.DEFAULT));
+            io.sync("fs.close", new JSONObject().put("fd", readFd).toString());
+            assertTrue(new JSONObject(io.sync("fs.remove", new JSONObject().put("path", host.fixtureRoot.getPath()).put("recursive", true).toString())).has("error"));
+        });
+    }
+    @Test public void logoutBridgeWritesIsolatedCredentialTombstone() throws Exception {
+        test((io, host, folder) -> {
+            String keyAlias = "zhiyun-native-official-credential-v1-fixture-" + host.fixtureRoot.getName();
             try {
-                host.call(io, "secret.set", new JSONObject().put("alias", alias).put("value", marker));
-                assertEquals(marker, host.call(io, "secret.get", new JSONObject().put("alias", alias)));
-                JSONObject rejected = new JSONObject(io.sync("fs.readText", new JSONObject().put("path", folder.getParentFile().getParentFile().getPath() + "/../files/.secrets").toString()));
-                assertTrue(rejected.has("error"));
-                String root = new JSONObject(io.sync("app.paths", "{}")).getJSONObject("value").getString("filesDir");
-                File secureFolder = new File(new File(root).getParentFile(), ".secrets");
-                File[] files = secureFolder.listFiles(); assertNotNull(files);
-                for (File file : files) assertFalse(new String(Files.readAllBytes(file.toPath()), StandardCharsets.ISO_8859_1).contains(marker));
-            } finally { host.call(io, "secret.remove", new JSONObject().put("alias", alias)); }
+                NativeCredentialStore store = new NativeCredentialStore(host.fixtureRoot, "native-official-credentials");
+                NativeCredentialRevocation protocol = new NativeCredentialRevocation(store);
+                String epoch = protocol.recover(g -> {});
+                NativeCredentialState state = new NativeCredentialState(protocol.guarded(epoch));
+                String enrollment = state.beginEnrollment(true);
+                state.dispatchEnrollment(enrollment, "synthetic-user", "synthetic-password", "synthetic-id", (u,p) -> {});
+                state.saveVerified(enrollment, true, true, "synthetic-user", "synthetic-password", "synthetic-id", "synthetic-user", "synthetic-id", "synthetic-user");
+                assertEquals(true, host.call(io, "app.revokeNativeCredentials", new JSONObject()));
+                NativeCredentialState.Record record = store.transaction(access -> access.read());
+                assertEquals(NativeCredentialState.Phase.EMPTY, record.phase);
+                assertFalse(record.authorized); assertEquals("", record.password); assertNotEquals(epoch, record.epoch);
+                try { state.reserve(); fail("old generation survived logout"); } catch (java.io.IOException expected) { }
+            } finally {
+                java.security.KeyStore keys = java.security.KeyStore.getInstance("AndroidKeyStore"); keys.load(null);
+                keys.deleteEntry(keyAlias);
+            }
+        });
+    }
+    @Test public void campusCredentialsAndUnknownAliasesAreNotAccessibleViaBridge() throws Exception {
+        test((io, host, folder) -> {
+            for (String alias : new String[]{"zhiyun-official-login-v1", "zhiyun-official-login-v2", "zhiyun-official-login-state-v1", "unknown-test-alias"})
+                for (String method : new String[]{"secret.get", "secret.set", "secret.remove"}) {
+                    try { host.call(io, method, new JSONObject().put("alias", alias).put("value", "synthetic")); fail("credential bridge unexpectedly accepted " + method); }
+                    catch (java.util.concurrent.ExecutionException expected) { assertNotNull(expected.getCause()); }
+                }
+            assertEquals(false,host.call(io,"app.silentLogin",new JSONObject().put("submitScript","alert(1)")
+                    .put("status",401).put("consent",true).put("password","synthetic")));
+        });
+    }
+    @Test public void logoutGenerationRejectsWritesFromOldNativeInstance() throws Exception {
+        test((io, host, folder) -> {
+            TestHost oldHost = new TestHost(); AtomicReference<NativeIO> oldIo = new AtomicReference<>(); AtomicReference<WebView> oldView = new AtomicReference<>();
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> { try { oldView.set(new WebView(host.activity)); oldHost.activity = host.activity; oldHost.view = oldView.get(); oldIo.set(new NativeIO(host.activity, oldView.get(), oldHost, host.fixtureRoot)); } catch (Exception error) { throw new RuntimeException(error); } });
+            String alias = "zhiyun-last-account-v1";
+            try {
+                oldHost.call(oldIo.get(), "app.invalidateSession", new JSONObject());
+                try { host.call(io, "secret.set", new JSONObject().put("alias", alias).put("value", "old-synthetic")); fail("stale write succeeded"); } catch (java.util.concurrent.ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("已取消")); }
+                try { host.call(io, "app.invalidateSession", new JSONObject()); fail("stale instance regained authority"); } catch (java.util.concurrent.ExecutionException expected) { assertTrue(expected.getCause().getMessage().contains("已取消")); }
+                oldHost.call(oldIo.get(), "secret.set", new JSONObject().put("alias", alias).put("value", "new-synthetic"));
+                assertEquals("new-synthetic", oldHost.call(oldIo.get(), "secret.get", new JSONObject().put("alias", alias)));
+            } finally { oldIo.get().close(); InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> oldView.get().destroy()); }
         });
     }
     @Test public void rawPixelColorsAndCropArePreserved() throws Exception {
@@ -160,6 +237,14 @@ public class NativeIOIntegrationTest {
                 assertTrue(new JSONObject(io.sync("resource.remote",new JSONObject().put("url",url).toString())).has("error"));
             assertTrue(new JSONObject(io.sync("fs.exists",new JSONObject().put("path","/system/build.prop").toString())).has("error"));
         });
+    }
+    private static void deleteFixture(File file) throws Exception {
+        if (file == null || !Files.exists(file.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) return;
+        if (!Files.isSymbolicLink(file.toPath()) && file.isDirectory()) {
+            File[] children = file.listFiles(); if (children == null) throw new IllegalStateException("fixture cleanup failed");
+            for (File child : children) deleteFixture(child);
+        }
+        Files.delete(file.toPath());
     }
     private static byte[] read(InputStream input) throws Exception { try (InputStream stream=input) { ByteArrayOutputStream result=new ByteArrayOutputStream();byte[] buffer=new byte[1024];int n;while((n=stream.read(buffer))!=-1)result.write(buffer,0,n);return result.toByteArray(); } }
     private static WebResourceRequest request(String url,String range) {

@@ -1,8 +1,10 @@
 import { UIAbility, Want, AbilityConstant } from '@kit.AbilityKit';
 import { window, display } from '@kit.ArkUI';
 import { webview } from '@kit.ArkWeb';
+import { NativeAccountAcceptance } from '../services/NativeAccountAcceptance';
 export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
+    NativeAccountAcceptance.revoke();
     webview.WebviewController.initializeWebEngine();
     AppStorage.setOrCreate<boolean>('foreground', true);
     ['safeTop', 'safeBottom', 'safeLeft', 'safeRight'].forEach((name: string) => AppStorage.setOrCreate<number>(name, 0));

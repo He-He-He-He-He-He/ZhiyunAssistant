@@ -1,5 +1,6 @@
 package cn.suike.slides.android;
 
+import android.content.Intent;
 import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
@@ -17,6 +18,9 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
+import java.util.Collections;
 import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
@@ -29,14 +33,27 @@ import java.util.concurrent.Executors;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Credentials are entered on the real Zhejiang University page; there is never a JS interface here. */
+/** Manual official login; automatic credential capture and verification remain disabled. */
 public final class OfficialLoginActivity extends ComponentActivity {
+    private static java.lang.ref.WeakReference<OfficialLoginActivity> active = new java.lang.ref.WeakReference<>(null);
+    private static boolean cancelBeforeCreate;
+    static void prepareLogin() { cancelBeforeCreate = false; }
+    static void cancelPending() { OfficialLoginActivity current = active.get(); if (current != null && !current.isFinishing()) current.cancelForLogout(); else cancelBeforeCreate = true; }
+    private void cancelForLogout() {
+        closed = true; typedPassword = ""; ui.removeCallbacks(loginProbe); verifier.shutdownNow();
+        if (credentialVerifier != null) { credentialVerifier.cancel(); credentialVerifier = null; }
+        if (login != null) { login.stopLoading(); android.view.ViewParent parent = login.getParent(); if (parent instanceof android.view.ViewGroup) ((android.view.ViewGroup)parent).removeView(login); login.destroy(); login = null; }
+        setResult(RESULT_CANCELED); finish();
+    }
     private WebView login;
     private final ExecutorService verifier = Executors.newSingleThreadExecutor();
     private volatile boolean checking, closed;
     private long lastCheck;
     private final Handler ui = new Handler(Looper.getMainLooper());
-    private boolean visible;
+    private boolean visible, remember, verifying;
+    private String typedUser = "", typedPassword = "";
+    private CredentialVerifier credentialVerifier;
+    private android.app.AlertDialog progress;
     private final Runnable loginProbe = new Runnable() { @Override public void run() {
         if (!visible || closed) return;
         if (login != null && "classroom.zju.edu.cn".equals(Uri.parse(login.getUrl() == null ? "" : login.getUrl()).getHost())) verifySession();
@@ -45,6 +62,8 @@ public final class OfficialLoginActivity extends ComponentActivity {
     private static final String CLASSROOM = "https://classroom.zju.edu.cn";
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
+        active = new java.lang.ref.WeakReference<>(this);
+        if (cancelBeforeCreate) { cancelBeforeCreate = false; finish(); return; }
         if (Build.VERSION.SDK_INT >= 30) getWindow().setDecorFitsSystemWindows(false);
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(Color.rgb(243,246,250));
         Button back = new Button(this); back.setText("返回智云助手"); back.setAllCaps(false); back.setOnClickListener(v -> finish());
@@ -73,7 +92,9 @@ public final class OfficialLoginActivity extends ComponentActivity {
             return insets;
         });
         getOnBackPressedDispatcher().addCallback(this,new OnBackPressedCallback(true) { @Override public void handleOnBackPressed() { if (login.canGoBack()) login.goBack(); else finish(); } });
-        login.loadUrl(CLASSROOM+"/");
+        new android.app.AlertDialog.Builder(this).setTitle("官方手动登录")
+            .setMessage("本官方页面不捕获或保存密码，也不会自动提交。原生账号验收需返回应用后，在「隐私与数据」内由你本人另行明确开启；每次启动默认关闭。")
+            .setPositiveButton("继续", (d, w) -> login.loadUrl(CLASSROOM + "/")).setCancelable(false).show();
     }
     private void verifySession() {
         if (closed || checking || System.currentTimeMillis()-lastCheck < 700) return;
@@ -93,12 +114,16 @@ public final class OfficialLoginActivity extends ComponentActivity {
                 try (InputStream stream = connection.getInputStream()) { byte[] buffer = new byte[4096]; int n; while ((n=stream.read(buffer)) != -1) { if (data.size()+n > 512*1024) return; data.write(buffer,0,n); } }
                 JSONObject value = new JSONObject(data.toString(StandardCharsets.UTF_8.name())).optJSONObject("params");
                 if (value == null || value.optString("id","").isEmpty() || "0".equals(value.optString("id"))) return;
-                runOnUiThread(() -> { if (!closed) { CookieManager.getInstance().flush(); setResult(RESULT_OK); finish(); } });
+                String accountId = value.optString("id"), accountName = value.optString("account", "").trim();
+                runOnUiThread(() -> { if (!closed && !verifying) { CookieManager.getInstance().flush(); finishLogin(); } });
             } catch (Exception ignored) { /* A failed probe never discards a saved session or credentials. */ }
             finally { checking = false; if (connection != null) connection.disconnect(); }
         });
     }
+    private void finishLogin() {
+        closed = true; setResult(RESULT_OK); finish();
+    }
     @Override protected void onResume() { super.onResume(); visible = true; ui.postDelayed(loginProbe,750); }
     @Override protected void onPause() { visible = false; ui.removeCallbacks(loginProbe); CookieManager.getInstance().flush(); super.onPause(); }
-    @Override protected void onDestroy() { closed = true; ui.removeCallbacks(loginProbe); verifier.shutdownNow(); if (login != null) { login.stopLoading(); login.destroy(); } super.onDestroy(); }
+    @Override protected void onDestroy() { if (active.get() == this) active.clear(); closed = true; typedPassword = ""; if (credentialVerifier != null) credentialVerifier.cancel(); if (progress != null) progress.dismiss(); ui.removeCallbacks(loginProbe); verifier.shutdownNow(); if (login != null) { login.stopLoading(); android.view.ViewParent parent = login.getParent(); if (parent instanceof android.view.ViewGroup) ((android.view.ViewGroup)parent).removeView(login); login.destroy(); } super.onDestroy(); }
 }

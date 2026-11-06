@@ -61,6 +61,7 @@ final class SyntheticCourseProtocol:URLProtocol {
     }
     static func sessionRepairContracts()throws{
         NSApplication.shared.setActivationPolicy(.prohibited)
+        check(!automaticPasswordSubmissionEnabled,"unaccepted automatic password submission stays disabled in this release")
         func jwt(_ delta:Double)->String{let payload=try! JSONSerialization.data(withJSONObject:["exp":Date().addingTimeInterval(delta).timeIntervalSince1970]);return "fixture."+payload.base64EncodedString().replacingOccurrences(of:"=",with:"").replacingOccurrences(of:"+",with:"-").replacingOccurrences(of:"/",with:"_")+".signature"}
         func token(_ value:String,_ domain:String="classroom.zju.edu.cn")->HTTPCookie{HTTPCookie(properties:[.name:"_token",.value:"{i:0;s:6:\"_token\";i:1;s:"+String(value.count)+":\""+value+"\";}",.domain:domain,.path:"/",.secure:"TRUE"])!}
         let stale=token(jwt(-3600)),fresh=token(jwt(3600)),duplicate=token(jwt(-3600),".zju.edu.cn")
@@ -80,7 +81,7 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(noPassword.hasLogoutMarker(),"restart preserves logout without remembered credentials")
         let hasPassword=App();hasPassword.root=root.appendingPathComponent("with-password");let mockPassword=try JSONEncoder().encode(remembered);hasPassword.testSessionKeychain={name,_,_ in name==officialLoginCredential ? mockPassword:nil};try writeLogoutMarker(in:hasPassword.root)
         restartPrepared=false;hasPassword.prepareAutomaticLoginAfterRestart{restartPrepared=true};try waitUntil({restartPrepared})
-        check(!hasPassword.hasLogoutMarker(),"fresh process can authenticate after logout when credentials were explicitly saved")
+        check(hasPassword.hasLogoutMarker(),"logout remains authoritative across restart even if old credentials remain")
         let credentials=OfficialLoginCredentials(username:"synthetic-campus-id",password:"synthetic-campus-password")
         try app.storageQueue.sync{try app.saveOfficialLogin(credentials)}
         check(interactive==0 && !backend.isEmpty,"explicit password setup uses only noninteractive Keychain access")
@@ -117,6 +118,18 @@ final class SyntheticCourseProtocol:URLProtocol {
             check(true,"real Keychain stores and reads a synthetic credential without interaction")
         }
         if CommandLine.arguments.count==3,CommandLine.arguments[1].hasPrefix("--cold-session-"){try coldProcess(CommandLine.arguments[1],root:URL(fileURLWithPath:CommandLine.arguments[2],isDirectory:true));return}
+        if CommandLine.arguments.count==3,CommandLine.arguments[1]=="--reserve-login"{
+            let app=App();app.root=URL(fileURLWithPath:CommandLine.arguments[2]);exit((try app.reserveAutomaticLoginAttempt()) ? 0:2)
+        }
+        if CommandLine.arguments.count==4,CommandLine.arguments[1]=="--stale-session-writer"{
+            let app=App();app.root=URL(fileURLWithPath:CommandLine.arguments[2]);app.testSessionKeychain={_,_,_ in nil};app.processSessionEpoch=CommandLine.arguments[3]
+            guard try !app.saveSessionSnapshotIfCurrent(Data("old-process".utf8),epoch:app.processSessionEpoch) else{throw appError("stale session accepted")}
+            do{try app.storageQueue.sync{try app.saveIdentity("{\"id\":\"stale\"}")};throw appError("stale identity accepted")}catch let e as NSError where e.domain=="智云助手" && e.localizedDescription=="登录状态已更改，请重新登录"{};return
+        }
+        if CommandLine.arguments.count==4,CommandLine.arguments[1]=="--secret-writer"{
+            let store=LocalSecretStore(root:URL(fileURLWithPath:CommandLine.arguments[2])){_ in Data(repeating:17,count:32)}
+            for index in 0..<20{guard store.set(CommandLine.arguments[3]+"-"+String(index),Data("value".utf8)) else{throw appError("concurrent write failed")}};return
+        }
         try sessionRepairContracts()
         for (code,expected) in [(URLError.timedOut,"网络请求超时，请稍后重试"),(.notConnectedToInternet,"当前没有网络连接，请连接网络后重试"),(.networkConnectionLost,"网络连接中断，请重试"),(.cannotFindHost,"无法解析服务器地址，请检查网络"),(.cancelled,"请求已取消"),(.serverCertificateUntrusted,"安全连接校验失败，请检查系统时间或网络")] {
             let error=NSError(domain:NSURLErrorDomain,code:code.rawValue,userInfo:[NSLocalizedDescriptionKey:"English failure with a private URL"])
@@ -212,6 +225,14 @@ final class SyntheticCourseProtocol:URLProtocol {
         check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==syntheticSlotSecret && slotValues["campus-app-build-B"]==syntheticSlotSecret,"readable previous slot migrates silently to next build")
         _ = nextSlots.access("campus",nil,remove:true,onError:{slotFailures.append($0)});denyOld=false;slotRequests.removeAll()
         check(nextSlots.access("campus",nil,remove:false,onError:{slotFailures.append($0)})==nil && slotRequests.isEmpty,"explicit delete tombstone prevents legacy secret resurrection")
+        var copies=["fixture":Data("old".utf8),"fixture-app-a":Data("one".utf8),"fixture-app-b":Data("two".utf8)],denyCopy=true,copyFailure=false
+        let copySlots=CredentialSlots(indexURL:slotFolder.appendingPathComponent("copies.json"),tag:"b",list:{name in copies.keys.filter{$0==name || $0.hasPrefix(name+"-app-")}}){name,data,remove,allowUI,onError in
+            if remove{if name=="fixture-app-a" && denyCopy{onError(errSecInteractionNotAllowed)}else{copies.removeValue(forKey:name)};return nil};if let data{copies[name]=data};return copies[name]
+        }
+        _ = copySlots.access("fixture",nil,remove:true,onError:{_ in copyFailure=true})
+        check(copyFailure && copies["fixture-app-a"] != nil,"inaccessible legacy copy reports deletion failure")
+        denyCopy=false;copyFailure=false;_ = copySlots.access("fixture",nil,remove:true,onError:{_ in copyFailure=true})
+        check(!copyFailure && copies.isEmpty,"retry removes all enumerated legacy copies")
         // Legacy plaintext API keys migrate only after verified Keychain storage.
         let keyFile=slotFolder.appendingPathComponent("service-keys.json"),personalSecret=Data("personal-synthetic-deepseek-key".utf8)
         try Data("{\"account-deepseek\":\"personal-synthetic-deepseek-key\"}".utf8).write(to:keyFile)
@@ -222,6 +243,9 @@ final class SyntheticCourseProtocol:URLProtocol {
         let store=ServiceKeyStore(url:keyFile)
         check(store.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:backend)==nil,"failed Keychain migration fails closed")
         check(FileManager.default.fileExists(atPath:keyFile.path),"failed migration preserves legacy key for recovery")
+        var readFailed=false,attemptedMigration=false
+        let unreadable=store.access("account-deepseek",nil,remove:false,onError:{_ in},legacyFailed:{readFailed}){value,_ in if value != nil{attemptedMigration=true}else{readFailed=true};return nil}
+        check(unreadable==nil && !attemptedMigration,"failed secure read never migrates plaintext over an inaccessible key")
         denyWrite=false
         check(store.access("account-deepseek",nil,remove:false,onError:{keyFailures.append($0)},legacy:backend)==personalSecret,"legacy key migrates to Keychain")
         check(!FileManager.default.fileExists(atPath:keyFile.path),"verified migration removes plaintext file")
@@ -400,6 +424,47 @@ final class SyntheticCourseProtocol:URLProtocol {
         qwenStream.consume(Data((#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"home\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"completion_tokens":7}}"#+"\n\ndata: [DONE]\n").utf8))
         check(qwenStream.answer=="本地 Qwen" && qwenStream.finishReason=="tool_calls" && (qwenStream.calls[0]?["function"] as? [String:String])?["arguments"]=="{\"page\":\"home\"}" && qwenStream.usage["completion_tokens"] as? Int==7,"local Qwen SSE preserves incremental tool calls and usage")
         qwenStream.session.invalidateAndCancel()
+        let secretsRoot=isolated.appendingPathComponent("local-secrets-contract")
+        var localKey:Data?,localKeyAvailable=true
+        let secrets=LocalSecretStore(root:secretsRoot){value in
+            guard localKeyAvailable else{return nil};if let value{localKey=value};return localKey
+        }
+        let remembered=Data("synthetic-campus-login".utf8)
+        check(secrets.set("official-login-v1",remembered),"local secrets can be saved with a protected key")
+        let secretsURL=secretsRoot.appendingPathComponent("secrets.sealed"),originalSecrets=try Data(contentsOf:secretsURL)
+        localKeyAvailable=false
+        let lockedSecrets=LocalSecretStore(root:secretsRoot){value in
+            guard localKeyAvailable else{return nil};if let value{localKey=value};return localKey
+        }
+        do{_ = try lockedSecrets.get("official-login-v1");fatalError("locked secrets appeared empty")}catch{checks+=1}
+        check(!lockedSecrets.set("other",Data("replacement".utf8)),"locked secrets reject writes")
+        check((try Data(contentsOf:secretsURL))==originalSecrets,"locked secrets preserve the original encrypted file")
+        localKeyAvailable=true
+        check((try lockedSecrets.get("official-login-v1"))==remembered,"a temporarily unavailable key can recover in the same process")
+        localKeyAvailable=false
+        check(!lockedSecrets.remove("official-login-v1"),"failed removal is reported")
+        localKeyAvailable=true
+        let reopenedSecrets=LocalSecretStore(root:secretsRoot){value in if let value{localKey=value};return localKey}
+        check(try reopenedSecrets.get("official-login-v1")==nil,"failed removal leaves a persistent tombstone across processes")
+        var legacyReads=0;check(try reopenedSecrets.getOrMigrate("official-login-v1"){legacyReads+=1;return remembered}==nil && legacyReads==0,"tombstone prevents migration of old credentials")
+        check(!reopenedSecrets.setIfNotRemoved("official-login-v1",remembered),"a delayed legacy migration cannot undo another process's deletion")
+        check(try reopenedSecrets.set("official-login-v1",remembered) && reopenedSecrets.get("official-login-v1")==remembered,"explicit save re-enables a deleted credential")
+        let missingKeyRoot=isolated.appendingPathComponent("keychain-read-failure");var attemptedKeyCreation=false
+        let deniedKey=LocalSecretStore(root:missingKeyRoot){value in if value != nil{attemptedKeyCreation=true};throw appError("keychain locked",code:Int(errSecInteractionNotAllowed))}
+        check(!deniedKey.set("secret",remembered) && !attemptedKeyCreation,"Keychain read failure never creates or overwrites a master key")
+        let concurrentRoot=isolated.appendingPathComponent("concurrent-secrets")
+        let firstStore=LocalSecretStore(root:concurrentRoot){_ in Data(repeating:17,count:32)},secondStore=LocalSecretStore(root:concurrentRoot){_ in Data(repeating:17,count:32)}
+        check(firstStore.set("first",remembered) && secondStore.set("second",remembered) && firstStore.set("third",remembered),"independent store instances write successfully")
+        check(try secondStore.get("first")==remembered && secondStore.get("second")==remembered && secondStore.get("third")==remembered,"independent stores never overwrite changes from stale caches")
+        var writers=[Process]()
+        for name in ["process-a","process-b"]{let child=Process();child.executableURL=URL(fileURLWithPath:CommandLine.arguments[0]);child.arguments=["--secret-writer",concurrentRoot.path,name];child.standardOutput=FileHandle.nullDevice;child.standardError=FileHandle.nullDevice;try child.run();writers.append(child)}
+        try waitUntil({writers.allSatisfy{!$0.isRunning}},seconds:30)
+        check(writers.allSatisfy{$0.terminationStatus==0},"concurrent processes successfully write secrets")
+        for name in ["process-a","process-b"]{for index in 0..<20{check(try firstStore.get(name+"-"+String(index))==Data("value".utf8),"cross-process writes preserve every entry")}}
+        var damagedSecrets=originalSecrets;damagedSecrets[damagedSecrets.count-1] ^= 1;try damagedSecrets.write(to:secretsURL)
+        let damagedStore=LocalSecretStore(root:secretsRoot){value in if let value{localKey=value};return localKey}
+        let damagedWriteAccepted=damagedStore.set("other",Data("replacement".utf8)),damagedAfterWrite=try Data(contentsOf:secretsURL)
+        check(!damagedWriteAccepted && damagedAfterWrite==damagedSecrets,"damaged secrets are not replaced by an empty store")
         let protectedRoot=isolated.appendingPathComponent("protected-session")
         let legacy=SessionVault(root:protectedRoot),protectedContent=Data("synthetic-session-for-migration".utf8)
         try legacy.save(protectedContent)
@@ -591,10 +656,59 @@ final class SyntheticCourseProtocol:URLProtocol {
         var markerRestore=false;markerApp.restoreCookies{markerRestore=true};try waitUntil({markerRestore});var blockedCookies=[HTTPCookie]();readCookies=false;markerApp.store.httpCookieStore.getAllCookies{blockedCookies=$0;readCookies=true};try waitUntil({readCookies});check(blockedCookies.isEmpty && credentialReads==0,"logout marker prevents restoring stale cookie snapshot")
         do{try markerApp.storageQueue.sync{try markerApp.saveIdentity("invalid identity")};fatalError("invalid identity accepted")}catch{check(markerApp.hasLogoutMarker(),"invalid profile save cannot clear explicit logout")}
         let readsBeforeProfile=credentialReads
+        markerApp.processSessionEpoch=try sessionEpoch(in:markerProfile);markerApp.explicitLoginEpoch=markerApp.processSessionEpoch
         try markerApp.storageQueue.sync{try markerApp.saveIdentity("{\"id\":\"new-fixture\",\"password\":\"excluded\",\"token\":\"excluded\"}")}
         check(!markerApp.hasLogoutMarker() && markerApp.storageQueue.sync{markerApp.storedIdentity()}.contains("new-fixture") && credentialReads==readsBeforeProfile,"profile metadata restores local account without accessing Keychain")
         let profile=try String(contentsOf:markerApp.profileIdentityURL(),encoding:.utf8),mode=(try FileManager.default.attributesOfItem(atPath:markerApp.profileIdentityURL().path))[.posixPermissions] as? Int
         check(!profile.contains("password") && !profile.contains("token") && mode==0o600,"profile cache excludes credentials and is owner-readable only")
+        let optOut=App();optOut.root=isolated.appendingPathComponent("failed-password-delete")
+        var oldPassword=try JSONEncoder().encode(OfficialLoginCredentials(username:"old-user",password:"old-password")),denyDeletion=true
+        optOut.testKeychainOperation={name,data,remove,allowUI,onError in
+            guard name==officialLoginCredential else{return nil}
+            if remove{if denyDeletion{onError(errSecInteractionNotAllowed)}else{oldPassword=Data()};return nil}
+            if let data{oldPassword=data;return data};return oldPassword.isEmpty ? nil:oldPassword
+        }
+        do{try optOut.storageQueue.sync{try optOut.disableOfficialLogin()};fatalError("failed deletion reported success")}catch{checks+=1}
+        check(FileManager.default.fileExists(atPath:optOut.root.appendingPathComponent("official-login-disabled").path) && !oldPassword.isEmpty,"failed deletion preserves persistent auto-login opt-out")
+        try writeLogoutMarker(in:optOut.root)
+        optOut.processSessionEpoch=try sessionEpoch(in:optOut.root);optOut.explicitLoginEpoch=optOut.processSessionEpoch
+        try optOut.storageQueue.sync{try optOut.saveIdentity("{\"id\":\"new-user\"}")}
+        check(!optOut.hasLogoutMarker() && FileManager.default.fileExists(atPath:optOut.root.appendingPathComponent("official-login-disabled").path),"manual login and identity save cannot re-enable an old password")
+        denyDeletion=false;try optOut.storageQueue.sync{try optOut.disableOfficialLogin()};check(oldPassword.isEmpty,"retry removes the old password")
+        let manual=App();manual.root=isolated.appendingPathComponent("manual-no-save");var manualOld=oldPassword
+        manualOld=try JSONEncoder().encode(OfficialLoginCredentials(username:"previous",password:"previous-password"))
+        manual.testKeychainOperation={name,data,remove,allowUI,onError in if remove{manualOld=Data();return nil};if let data{manualOld=data;return data};return manualOld.isEmpty ? nil:manualOld}
+        try manual.storageQueue.sync{try manual.disableOfficialLogin()}
+        check(manualOld.isEmpty && FileManager.default.fileExists(atPath:manual.root.appendingPathComponent("official-login-disabled").path),"manual login setup removes and disables the previously remembered login")
+        let epochRoot=isolated.appendingPathComponent("epoch-race"),stale=App(),freshApp=App();stale.root=epochRoot;freshApp.root=epochRoot
+        stale.testSessionKeychain={_,_,_ in nil};freshApp.testSessionKeychain={_,_,_ in nil}
+        _ = stale.processSessionEpoch;try writeLogoutMarker(in:epochRoot)
+        do{try stale.storageQueue.sync{try stale.saveIdentity("{\"id\":\"stale\"}")};fatalError("stale identity saved")}catch{check(stale.hasLogoutMarker(),"queued identity cannot undo another process logout")}
+        do{try stale.storageQueue.sync{try stale.saveOfficialLogin(OfficialLoginCredentials(username:"stale",password:"stale"))};fatalError("stale password saved")}catch{check(stale.hasLogoutMarker(),"queued password cannot undo another process logout")}
+        check(try !stale.saveSessionSnapshotIfCurrent(Data("old".utf8),epoch:stale.processSessionEpoch),"stale process cannot write session after logout")
+        freshApp.processSessionEpoch=try sessionEpoch(in:epochRoot);freshApp.explicitLoginEpoch=freshApp.processSessionEpoch
+        try freshApp.storageQueue.sync{try freshApp.saveIdentity("{\"id\":\"new\"}")}
+        do{try freshApp.storageQueue.sync{try freshApp.saveIdentity("{\"id\":\"late\"}",expectedEpoch:stale.processSessionEpoch)};fatalError("queued identity accepted after re-login")}catch{checks+=1}
+        do{try freshApp.storageQueue.sync{try freshApp.saveOfficialLogin(OfficialLoginCredentials(username:"late",password:"late"),expectedEpoch:stale.processSessionEpoch)};fatalError("queued password accepted after re-login")}catch{checks+=1}
+        check(try !stale.saveSessionSnapshotIfCurrent(Data("old".utf8),epoch:stale.processSessionEpoch),"old process cannot restore snapshot after a new login clears logout")
+        let staleChild=Process();staleChild.executableURL=URL(fileURLWithPath:CommandLine.arguments[0]);staleChild.arguments=["--stale-session-writer",epochRoot.path,stale.processSessionEpoch!];staleChild.standardOutput=FileHandle.nullDevice;staleChild.standardError=FileHandle.nullDevice;try staleChild.run()
+        try waitUntil({!staleChild.isRunning},seconds:30);check(staleChild.terminationStatus==0,"separate stale process cannot overwrite session or identity")
+        let switched=App();switched.root=isolated.appendingPathComponent("account-switch");var previousPassword=Data("old".utf8)
+        switched.testSessionKeychain={name,data,remove in if remove && name==officialLoginCredential{previousPassword=Data()};return data}
+        try switched.storageQueue.sync{try switched.saveIdentity("{\"id\":\"first\"}");try switched.saveIdentity("{\"id\":\"second\"}")}
+        check(previousPassword.isEmpty && FileManager.default.fileExists(atPath:switched.root.appendingPathComponent("official-login-disabled").path),"switching identities disables the previously remembered login")
+        let throttleRoot=isolated.appendingPathComponent("throttle"),throttleA=App(),throttleB=App();throttleA.root=throttleRoot;throttleB.root=throttleRoot
+        let now=Date();check(try throttleA.reserveAutomaticLoginAttempt(now:now),"first automatic attempt is reserved")
+        check(try !throttleB.reserveAutomaticLoginAttempt(now:now),"other process is throttled during an automatic attempt")
+        check(try throttleB.reserveAutomaticLoginAttempt(now:now.addingTimeInterval(31)) && throttleA.reserveAutomaticLoginAttempt(now:now.addingTimeInterval(62)) && !throttleB.reserveAutomaticLoginAttempt(now:now.addingTimeInterval(93)),"global attempt budget is shared across processes")
+        let throttleProcessRoot=isolated.appendingPathComponent("throttle-processes");var attempts=[Process]()
+        for _ in 0..<4{let child=Process();child.executableURL=URL(fileURLWithPath:CommandLine.arguments[0]);child.arguments=["--reserve-login",throttleProcessRoot.path];child.standardOutput=FileHandle.nullDevice;child.standardError=FileHandle.nullDevice;try child.run();attempts.append(child)}
+        try waitUntil({attempts.allSatisfy{!$0.isRunning}},seconds:30)
+        check(attempts.filter{$0.terminationStatus==0}.count==1 && attempts.filter{$0.terminationStatus==2}.count==3,"concurrent processes cannot reserve multiple login attempts")
+        let failingCleanup=App();failingCleanup.root=isolated.appendingPathComponent("failed-logout-cleanup");failingCleanup.testKeychainOperation={name,data,remove,allowUI,onError in if remove && name=="cookies"{onError(errSecIO)};return nil}
+        try writeLogoutMarker(in:failingCleanup.root)
+        failingCleanup.processSessionEpoch=try sessionEpoch(in:failingCleanup.root);failingCleanup.explicitLoginEpoch=failingCleanup.processSessionEpoch
+        do{try failingCleanup.storageQueue.sync{try failingCleanup.saveIdentity("{\"id\":\"new\"}")};fatalError("failed cleanup cleared logout")}catch{check(failingCleanup.hasLogoutMarker(),"failed old session cleanup keeps logout marker authoritative")}
         var interactiveSessionAccess=0;app.testKeychainOperation={_,_,_,allowUI,onError in if allowUI{interactiveSessionAccess+=1};onError(errSecInteractionNotAllowed);return nil}
         app.sessionNeedsResume=false;app.testSessionBootstrap={done in done(false)}
         let sessionRecovery=try bridgeCall("authorizeCredentials",["purpose":"session"]) as! [String:Any]
@@ -630,6 +744,15 @@ final class SyntheticCourseProtocol:URLProtocol {
         let agentBody=try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any]
         check((agentBody["thinking"] as? [String:String])?["type"]=="enabled" && agentBody["reasoning_effort"] as? String=="high","personal agent enables thinking and effort")
         check(agentBody["max_tokens"] as? Int==16384,"agent has room for reasoning and complete tool arguments")
+        let agentToolNames=["app_state","app_actions","app_do","app_interface","course_knowledge"]
+        let agentTools=agentToolNames.map{name -> [String:Any] in ["type":"function","function":["name":name,"parameters":["type":"object","properties":[:]]]]}
+        _ = try bridgeCall("ai",["messages":aiMessage,"provider":"personal","purpose":"agent","tools":agentTools])
+        let fiveToolBody=try JSONSerialization.jsonObject(with:aiRequests.last!.httpBody!) as! [String:Any]
+        check((fiveToolBody["tools"] as? [[String:Any]])?.count==5 && fiveToolBody["tool_choice"] as? String=="auto","knowledge-enabled agent sends all five tools instead of silently dropping the catalogue")
+        let requestCountBeforeBadTools=aiRequests.count
+        for invalidTools in [Array(repeating:agentTools[0],count:129),[["type":"function","function":["name":"broken"]]],"invalid"] as [Any] {
+            do{_ = try bridgeCall("ai",["messages":aiMessage,"purpose":"agent","tools":invalidTools]);fatalError("invalid tool catalogue accepted")}catch{check(aiRequests.count==requestCountBeforeBadTools,"invalid tool catalogue fails explicitly before network access")}
+        }
         let countBeforeInvalid=aiRequests.count
         do{_ = try bridgeCall("ai",["messages":aiMessage,"purpose":"agent","reasoning_effort":"arbitrary"]);fatalError("invalid reasoning effort accepted")}catch{check(aiRequests.count==countBeforeInvalid,"invalid effort is rejected before external request")}
         let longerTask=Array(repeating:["role":"user","content":"synthetic step"],count:105)

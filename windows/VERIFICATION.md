@@ -11,6 +11,19 @@
 
 完整的本机最终结果必须与最后一次构建对应，以该提交的测试记录为准。此前单独通过的用例不被写成未运行的最终整套结果。
 
+## 2026-11-06 · 0.8.0-beta.4 本机构建
+
+- 主机为 macOS Apple Silicon / Node.js 22.14.0；未执行 Windows 原生安装、启动、卸载或 DPAPI 验收，也未触发或修改 Windows CI。
+- `npm run check` 通过；`npm test` 最终 308/308 通过，零失败、零跳过。新增父域 `.zju.edu.cn` Cookie 保存/恢复/清除，以及清理部分失败后继续其他清理并报错的回归。
+- 最终源码 `npm run test:e2e` 整套 41/41 通过，零跳过，约 48.1 秒。上一次整套曾在流式回答鼠标拖选场景失败（只选中一个字符）；该项独立复测及最终整套重跑通过。保留此不稳定性记录，不将一次重跑通过写成外设兼容性已验收。
+- `npm audit` 全部依赖为 6 项中危、0 高危、0 严重，均沿构建工具的 minimatch 依赖链传播（GHSA-g3hv-75wg-m249）。`npm audit --omit=dev` 为 0；由于应用依赖使用构建时打包，后者不能单独证明整个应用零漏洞。未执行建议降级到 electron-builder 24.13.3 的强制自动修复，以免回退已修复 ARM64 安装器的 26.15.6。
+- 由当前源码重新生成 x64、ARM64 ZIP 与 NSIS Setup；未复制交接中的 node_modules、dist、staging、release 或旧版发布包。ARM64 内置下载器两次中断后，独立下载官方 Electron 44.10.1 运行时并核对官方清单 SHA256：`220b9496d7128880f85bba62dde7a4120c54b2b3f8c3e3851fb6f1f762db2940`，再交给同一打包器打包。
+- 两个解包目录均通过 `package-audit.cjs` 的 PE 架构、ASAR 资源、外置图像 Worker 和敏感内容扫描，零发现；归档内版本为 0.8.0-beta.4。两个 ASAR 的 SHA256 相同：`652c4eaa98787a1967712b0db751414b58a8f9c9eb5f26fee1acfabad1bdd028`。
+- 密码自动登录仍为 disabled；隔离验证模块只有协议及合成测试，不连接真实认证、不提交密码。真实校园认证、CAS RSA、验证码、真实课堂媒体和付费 AI 均不在本次验收内。
+- 构建、审计及本机 UI 测试不等于本版本已通过原生 Windows CI。安装器没有 Authenticode 签名，生成成功不等于已经安装验证。
+
+发布产物与 SHA256 见 [RELEASE-0.8.0-beta.4.md](RELEASE-0.8.0-beta.4.md)；详细本机静态报告位于 `work/package-audit-{x64,arm64}.json`，依赖审计位于 `work/npm-audit-{all,production}.json`。
+
 ## 2026-10-13 本机收尾检查
 
 - TypeScript 检查和 258 项模型、服务及桌面单元检查通过，零失败、零跳过。

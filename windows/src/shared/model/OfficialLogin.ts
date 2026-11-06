@@ -13,21 +13,6 @@ export const inspectLoginScript: string = `(() => {
   const captcha = document.getElementById('kaptcha');
   return JSON.stringify({ready:!!document.getElementById('username') && !!document.getElementById('password') && !!document.getElementById('dl') && typeof window.checkForm === 'function',captcha:!!captcha && getComputedStyle(captcha).display !== 'none' && (!captcha.getClientRects || captcha.getClientRects().length > 0),error:(document.getElementById('errormsg')?.textContent || '').trim()});
 })()`;
-export function submitLoginScript(username: string, password: string): string {
-  // Run the school's own submit handler so RSA, CSRF and captcha checks remain intact.
-  return `(() => {
-    if (location.origin !== 'https://zjuam.zju.edu.cn' || location.pathname !== '/cas/login') return 'untrusted';
-    const fields = ${JSON.stringify({ username, password })};
-    const user = document.getElementById('username'), pass = document.getElementById('password'), button = document.getElementById('dl');
-    if (!user || !pass || !button || typeof window.checkForm !== 'function') return 'not-ready';
-    user.value = fields.username; pass.value = fields.password;
-    user.dispatchEvent(new Event('input', {bubbles:true})); pass.dispatchEvent(new Event('input', {bubbles:true}));
-    const captcha = document.getElementById('kaptcha');
-    if (captcha && getComputedStyle(captcha).display !== 'none' && (!captcha.getClientRects || captcha.getClientRects().length > 0)) return 'verification';
-    button.click(); return 'submitted';
-  })()`;
-}
-
 export function webString(result: string): string {
   try { const decoded = JSON.parse(result) as string; if (typeof decoded === 'string') return decoded; } catch (_) {}
   return result;

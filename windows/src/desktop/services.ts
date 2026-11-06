@@ -10,6 +10,7 @@ import { configureCompat, credentialledFetch, allowedNetworkUrl, common, fileUri
 import { Zhiyun, courseIsLive, AccessDenied } from '../shared/services/Zhiyun';
 import { LocalStore, key, Snapshot } from '../shared/services/LocalStore';
 import { SessionStore } from '../shared/services/SessionStore';
+import { OfficialLoginStore } from '../shared/services/OfficialLoginStore';
 import { LiveTranscript } from '../shared/services/LiveTranscript';
 import { OfflineLibrary } from './downloads';
 import { AiClient } from '../shared/services/AiClient';
@@ -238,7 +239,7 @@ export function createServices(session: Session, userData: string, emit: Emit, a
         catch (error) { if (!await SessionStore.savedAccount()) { closeLesson(); account = undefined; store = undefined; return null; } return { ...saved, offline: true }; }
       }
       case 'session.account': { await SessionStore.refresh(); const value = bind(await api.account()); await SessionStore.rememberAccount(value); await SessionStore.saveCurrent(); return value; }
-      case 'session.logout': { cancelKnowledge(); closeLesson(); downloads?.pause(); clients.forEach(client => client.cancel()); clients.clear(); assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); contextLoaders.forEach(loader => loader.cancel()); contextLoaders.clear(); api.cancel(); store?.cache.flush(); await SessionStore.clear(); account = undefined; store = undefined; downloads = undefined; resources.clear(); displayedImages.clear(); resourceKeys.clear(); collections.bind(undefined); return null; }
+      case 'session.logout': { let legacyFailure: unknown; try { await OfficialLoginStore.clear(); } catch (error) { legacyFailure = error; } cancelKnowledge(); closeLesson(); downloads?.pause(); clients.forEach(client => client.cancel()); clients.clear(); assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); contextLoaders.forEach(loader => loader.cancel()); contextLoaders.clear(); api.cancel(); store?.cache.flush(); await SessionStore.clear(); if (legacyFailure) throw legacyFailure; account = undefined; store = undefined; downloads = undefined; resources.clear(); displayedImages.clear(); resourceKeys.clear(); collections.bind(undefined); return null; }
       case 'courses.schedule': { requiredStore(); const values = payload.start && payload.end ? await api.coursesBetween(account!, payload.start, payload.end) : await api.courses(account!); await api.refreshToday(values); return values; }
       case 'courses.history': return runHistory(payload);
       case 'courses.plaza': { const currentStore = requiredStore(), date = payload.date || shanghaiDate(Date.now() / 1000), values = await api.plaza(account!, date, payload.live === true); currentStore.savePlaza(date, payload.live === true, values); return values; }
@@ -384,5 +385,5 @@ export function createServices(session: Session, userData: string, emit: Emit, a
     return new Response(response.body, { status: response.status, headers });
   }
   async function dispose(): Promise<void> { cancelKnowledge(); assistantScanners.forEach(scanner => scanner.cancel()); assistantScanners.clear(); closeLesson(); await disposeImageJobs(); downloads?.pause(); contextLoaders.forEach(loader => loader.cancel()); clients.forEach(client => client.cancel()); api.cancel(); store?.cache.flush(); try { if (account) await SessionStore.saveCurrent(); } catch (_) {} }
-  return { handle, resolveResource, dispose };
+  return { handle, resolveResource, dispose, officialLogin: OfficialLoginStore };
 }

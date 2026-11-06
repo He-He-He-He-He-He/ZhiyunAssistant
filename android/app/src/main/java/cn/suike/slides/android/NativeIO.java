@@ -85,7 +85,12 @@ public final class NativeIO implements Closeable {
         CompletableFuture<String> pickImage();
         default CompletableFuture<String> pickImage(String source) { return pickImage(); }
         CompletableFuture<String> exportFile(String path, String name);
-        CompletableFuture<Void> login();
+        CompletableFuture<JSONObject> login();
+        default void cancelLogin() {}
+        default void cancelSilentLogin() {}
+        default CompletableFuture<Boolean> nativeAccountSettings() { return CompletableFuture.completedFuture(false); }
+        default CompletableFuture<Boolean> viewNativeDiagnostics() { return CompletableFuture.completedFuture(false); }
+        default CompletableFuture<Boolean> nativeAnonymousPreflight() { return CompletableFuture.completedFuture(false); }
         void fullscreen(boolean enabled);
         void openExternal(String url);
     }
@@ -125,21 +130,63 @@ public final class NativeIO implements Closeable {
     private final Set<String> cookieOrigins = ConcurrentHashMap.newKeySet();
     private final Set<File> protectedFiles = ConcurrentHashMap.newKeySet();
     private final AtomicBoolean closed = new AtomicBoolean();
-    private final Object secretLock = new Object();
+    private static final Object secretLock = new Object();
+    private static volatile long sessionGeneration;
+    private final File credentialFixtureRoot;
+    private static NativeIO currentInstance;
+    private volatile long instanceGeneration;
     private final NativeSocket sockets;
+    private final NativeOfficialSession officialSession = new NativeOfficialSession();
+    private NativeCasLogin nativeLogin;
+    private final NativeCasDiagnostics nativeDiagnostics;
+    private volatile NativeCasLogin.Identity nativeAccount;
+    // Rollout remains off on each process/activity start. Only a native confirmation enables it.
+    private volatile boolean nativeValidationEnabled;
+    private volatile boolean nativeForeground;
+    private volatile long unauthorizedGeneration = -1;
 
     public NativeIO(Activity activity, WebView webView, Host host) throws IOException {
+        this(activity, webView, host, null);
+    }
+
+    /** Instrumentation fixture only: private cache root, unavailable in non-debuggable builds. */
+    NativeIO(Activity activity, WebView webView, Host host, File fixtureRoot) throws IOException {
         this.activity = activity; this.webView = webView; this.host = host;
-        files = new File(activity.getFilesDir(), "workspace").getCanonicalFile();
-        cache = new File(activity.getCacheDir(), "workspace").getCanonicalFile();
+        if (fixtureRoot != null) {
+            File canonical = fixtureRoot.getCanonicalFile();
+            if ((activity.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) == 0
+                    || !activity.getCacheDir().getCanonicalFile().equals(canonical.getParentFile())
+                    || !canonical.getName().matches("native-integration-[0-9a-f-]{36}") || !canonical.isDirectory())
+                throw new IOException("invalid instrumentation fixture root");
+            files = new File(canonical, "workspace").getCanonicalFile();
+            cache = new File(canonical, "cache").getCanonicalFile();
+            secrets = new File(canonical, "secrets").getCanonicalFile();
+            if (!canonical.equals(files.getParentFile()) || !canonical.equals(cache.getParentFile()) || !canonical.equals(secrets.getParentFile()))
+                throw new IOException("invalid instrumentation fixture paths");
+        } else {
+            files = new File(activity.getFilesDir(), "workspace").getCanonicalFile();
+            cache = new File(activity.getCacheDir(), "workspace").getCanonicalFile();
+            secrets = new File(activity.getFilesDir(), ".secrets").getCanonicalFile();
+        }
+        credentialFixtureRoot = fixtureRoot == null ? null : fixtureRoot.getCanonicalFile();
+        synchronized (secretLock) { currentInstance = this; instanceGeneration = ++sessionGeneration; }
         temporary = new File(cache, "temp");
-        secrets = new File(activity.getFilesDir(), ".secrets").getCanonicalFile();
         makeDirectory(files); makeDirectory(cache); makeDirectory(temporary); makeDirectory(secrets);
         cookieOrigins.add("https://classroom.zju.edu.cn/");
         cookieOrigins.add("https://interactivemeta.cmc.zju.edu.cn/");
         cookieOrigins.add("https://zjuam.zju.edu.cn/");
         CookieManager.getInstance().setAcceptCookie(true);
         sockets = new NativeSocket(this::emit, random);
+        nativeDiagnostics=NativeCasDiagnostics.forFile(new File(credentialFixtureRoot==null?activity.getFilesDir():credentialFixtureRoot,"native-cas-diagnostics-v1.safe"));
+        try {
+            NativeCredentialStore credentialStore=credentialFixtureRoot==null ? new NativeCredentialStore(activity)
+                    : new NativeCredentialStore(credentialFixtureRoot,"native-official-credentials");
+            nativeLogin=new NativeCasLogin(credentialStore,NativeCasPrototype::newExplicitlyAuthorizedTransport,officialSession,nativeDiagnostics);
+        } catch(IOException unavailable) {
+            NativeCasDiagnostics.Context report=nativeDiagnostics.begin(NativeCasDiagnostics.Kind.INITIALIZATION);
+            report.stage(NativeCasDiagnostics.Stage.STORE); report.fail(unavailable);
+            nativeLogin=new NativeCasLogin(null,NativeCasPrototype::newExplicitlyAuthorizedTransport,officialSession,nativeDiagnostics);
+        } // Anonymous preflight/report viewing still work if credential storage is unavailable.
     }
 
     public String sync(String method, String payload) {
@@ -156,6 +203,12 @@ public final class NativeIO implements Closeable {
         if (closed.get()) { respond(id, null, "应用服务已关闭"); return; }
         try {
             JSONObject data = json(payload);
+            // Invalidate before cleanup, including requests queued on other NativeIO instances.
+            if (method.equals("app.invalidateSession")) {
+                synchronized (secretLock) { if (currentInstance != this) throw new IOException("登录操作已取消"); instanceGeneration = ++sessionGeneration; }
+                cancelNativeLogin(); officialSession.clear(); nativeAccount=null; nativeValidationEnabled=false; unauthorizedGeneration=-1;
+                respond(id, true, null); return;
+            }
             // Cancellation must not wait behind the download it is cancelling.
             if (method.equals("http.cancel")) {
                 String requestId = data.optString("requestId"); Transfer transfer = transfers.get(requestId);
@@ -180,7 +233,80 @@ public final class NativeIO implements Closeable {
                 main.post(() -> host.pickImage(data.optString("source")).whenComplete((result, error) -> respond(id, result, error == null ? null : safeError(error)))); return;
             }
             if (method.equals("app.login")) {
-                main.post(() -> host.login().whenComplete((result, error) -> respond(id, true, error == null ? null : safeError(error)))); return;
+                final long loginGeneration;
+                synchronized(secretLock) {
+                    if(currentInstance!=this) throw new IOException("登录操作已取消");
+                    instanceGeneration=++sessionGeneration; loginGeneration=instanceGeneration;
+                }
+                cancelNativeLogin(); officialSession.clear(); nativeAccount=null; nativeValidationEnabled=false; unauthorizedGeneration=-1;
+                workers.execute(() -> {
+                    try {
+                        if(loginGeneration!=instanceGeneration || currentInstance!=this) throw new IOException("登录操作已取消");
+                        // Account switching revokes saved consent before the official manual page opens.
+                        if(nativeLogin!=null) nativeLogin.logout();
+                        else {
+                            NativeCredentialStore store=credentialFixtureRoot==null ? new NativeCredentialStore(activity)
+                                : new NativeCredentialStore(credentialFixtureRoot,"native-official-credentials");
+                            new NativeCredentialRevocation(store).logout(officialSession::clear);
+                        }
+                        officialSession.clear(); nativeAccount=null;
+                        main.post(() -> {
+                            if(loginGeneration!=instanceGeneration || closed.get()) { respond(id,null,"登录操作已取消"); return; }
+                            host.login().whenComplete((result, error) -> respond(id, result == null ? true : result, error == null ? null : safeError(error)));
+                        });
+                    } catch(Exception failure) { respond(id,null,"自动登录凭据撤销未确认，请重试退出"); }
+                }); return;
+            }
+            if(method.equals("app.nativeAccountSettings")) {
+                main.post(() -> host.nativeAccountSettings().whenComplete((result,error) -> respond(id,result,error==null?null:safeError(error)))); return;
+            }
+            if(method.equals("app.viewNativeDiagnostics") || method.equals("app.nativeAnonymousPreflight")) {
+                // No renderer-supplied consent, proof or protocol parameters.
+                main.post(() -> (method.equals("app.viewNativeDiagnostics")?host.viewNativeDiagnostics():host.nativeAnonymousPreflight())
+                    .whenComplete((result,error) -> respond(id,result,error==null?null:nativeDiagnosticReport()))); return;
+            }
+            if (method.equals("app.cleanupLoginProfiles")) throw new IOException("当前不支持清理隔离登录数据");
+            if (method.equals("app.checkLoginProfiles")) {
+                // Check for known pending records only, without claiming deletion or modifying profiles.
+                main.post(() -> { try { CredentialVerifier.assertNoPendingProfiles(activity); respond(id, true, null); } catch (Exception error) { respond(id, null, "隔离登录残留未确认清理"); } }); return;
+            }
+            if (method.equals("app.cancelLogin")) {
+                main.post(() -> { try { host.cancelLogin(); respond(id, true, null); } catch (Exception error) { respond(id, null, safeError(error)); } }); return;
+            }
+            if (method.equals("app.cancelSilentLogin")) {
+                main.post(() -> { try { host.cancelSilentLogin(); respond(id, true, null); } catch (Exception error) { respond(id, null, safeError(error)); } }); return;
+            }
+            if (method.equals("app.silentLogin")) {
+                final long permit=nativeLogin==null?-1:nativeLogin.generation();
+                workers.execute(() -> { try { respond(id,silentLoginAfter401(permit),null); } catch(Exception error) { respond(id,null,nativeDiagnosticReport()); } }); return;
+            }
+            if (method.equals("app.revokeNativeCredentials")) {
+                final long generation = instanceGeneration;
+                workers.execute(() -> { try {
+                    synchronized (secretLock) {
+                        if (currentInstance != this || generation != sessionGeneration) throw new IOException("登录操作已取消");
+                        if(nativeLogin!=null) nativeLogin.logout();
+                        else {
+                            NativeCredentialStore store = credentialFixtureRoot == null ? new NativeCredentialStore(activity)
+                                : new NativeCredentialStore(credentialFixtureRoot, "native-official-credentials");
+                            new NativeCredentialRevocation(store).logout(officialSession::clear);
+                        }
+                        nativeAccount=null; nativeValidationEnabled=false; unauthorizedGeneration=-1;
+                    }
+                    respond(id, true, null);
+                } catch (Exception error) {
+                    respond(id, null, "自动登录凭据撤销未确认，请重试退出");
+                } }); return;
+            }
+            if (method.equals("app.clearOfficialCredentials")) {
+                final long generation = instanceGeneration;
+                workers.execute(() -> { try { synchronized (secretLock) {
+                    if (generation != sessionGeneration) throw new IOException("登录操作已取消");
+                    for (String alias : new String[]{"zhiyun-official-login-v2", "zhiyun-official-login-v1", "zhiyun-official-login-state-v1"})
+                        Files.deleteIfExists(secretFile(alias).toPath());
+                    syncSecretDirectory();
+                    respond(id, true, null);
+                } } catch (Exception error) { respond(id, null, "删除自动登录凭据失败，请重试"); } }); return;
             }
             if (method.equals("fs.export") || method.equals("export.share")) {
                 File source = path(data.getString("path"));
@@ -248,6 +374,21 @@ public final class NativeIO implements Closeable {
                         }
                         respond(id, object("text", text, "html", html), null);
                     } catch (Exception error) { respond(id, null, safeError(error)); }
+                }); return;
+            }
+            final long requestGeneration = instanceGeneration;
+            if (method.equals("http.stream") || method.equals("http.request") || method.startsWith("cookies.")) data.put("_sessionGeneration", requestGeneration);
+            if(method.equals("http.request")) data.put("_nativeLoginPermit",nativeLogin==null?-1:nativeLogin.generation());
+            if(method.startsWith("cookies.")) data.put("_nativeSessionVersion",officialSession.version());
+            if (method.equals("secret.set") || method.equals("secret.remove")) {
+                workers.execute(() -> { try { synchronized (secretLock) { if (requestGeneration != sessionGeneration) throw new IOException("登录操作已取消"); respond(id, value(method, data), null); } } catch (Exception error) { respond(id, null, safeError(error)); } }); return;
+            }
+            if(method.equals("cookies.set") || method.equals("cookies.clear") || method.equals("cookies.remove")) {
+                workers.execute(() -> {
+                    try {
+                        if(requestGeneration!=sessionGeneration) throw new IOException("登录操作已取消");
+                        respond(id,value(method,data),null); // Never wait for UI cookie callbacks while holding secretLock.
+                    } catch(Exception error) { respond(id,null,safeError(error)); }
                 }); return;
             }
             if (method.equals("http.stream")) {
@@ -345,16 +486,16 @@ public final class NativeIO implements Closeable {
                 } else removeTree(target); return true;
             }
             case "fs.copy": copy(p.get("from"), p.get("to")); return true;
-            case "secret.get": return getSecret(p.getString("alias"));
-            case "secret.set": setSecret(p.getString("alias"), p.getString("value")); return true;
+            case "secret.get": return getSecret(NativePolicy.bridgeSecretAlias(p.getString("alias")));
+            case "secret.set": setSecret(NativePolicy.bridgeSecretAlias(p.getString("alias")), p.getString("value")); return true;
             case "secret.remove": {
-                synchronized (secretLock) { Files.deleteIfExists(secretFile(p.getString("alias")).toPath()); } return true;
+                synchronized (secretLock) { Files.deleteIfExists(secretFile(NativePolicy.bridgeSecretAlias(p.getString("alias"))).toPath()); syncSecretDirectory(); } return true;
             }
             case "cookies.get": return cookies(p.optString("url", ""));
             case "cookies.set": setCookie(p); return true;
             case "cookies.remove": removeCookie(p); return true;
             case "cookies.flush": CookieManager.getInstance().flush(); return true;
-            case "cookies.clear": clearCookies(); return true;
+            case "cookies.clear": clearCookies(p); return true;
             case "http.request": return request(p);
             case "image.info": return imageInfo(imagePath(p));
             case "image.pixels": return pixels(p);
@@ -468,6 +609,10 @@ public final class NativeIO implements Closeable {
             return new String(cipher.doFinal(envelope, 13, envelope.length - 13), StandardCharsets.UTF_8);
         }
     }
+    private void syncSecretDirectory() throws Exception {
+        java.io.FileDescriptor directory = android.system.Os.open(secrets.getAbsolutePath(), android.system.OsConstants.O_RDONLY, 0);
+        try { android.system.Os.fsync(directory); } finally { android.system.Os.close(directory); }
+    }
     private void setSecret(String alias, String value) throws Exception {
         synchronized (secretLock) {
             byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
@@ -480,18 +625,101 @@ public final class NativeIO implements Closeable {
             try {
                 try (FileOutputStream output = new FileOutputStream(pending)) { output.write(envelope); output.getFD().sync(); }
                 Files.move(pending.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                syncSecretDirectory();
             } finally { pending.delete(); }
         }
     }
 
+    void cancelNativeLogin() { unauthorizedGeneration=-1; if(nativeLogin!=null) nativeLogin.cancel(); }
+    void nativeForeground(boolean active) { nativeForeground=active; if(!active) cancelNativeLogin(); }
+    NativeCasLogin.Identity currentNativeAccount() { return nativeAccount; }
+    String nativeDiagnosticReport() { return nativeDiagnostics.display(); }
+    /** Invoked only after MainActivity's explicit, read-only native confirmation. */
+    CompletableFuture<Boolean> anonymousNativePreflight() {
+        final long permit=nativeLogin.generation();
+        final NativeCasDiagnostics.Context report=nativeDiagnostics.begin(NativeCasDiagnostics.Kind.ANONYMOUS_PREFLIGHT);
+        try { return CompletableFuture.supplyAsync(() -> {
+            if(!nativeForeground || closed.get() || permit!=nativeLogin.generation()) {
+                report.fail(NativeCasDiagnostics.failure(NativeCasDiagnostics.Stage.SESSION,NativeCasDiagnostics.Category.CANCELLED)); return false;
+            }
+            return nativeLogin.anonymousPreflight(NativeCasPrototype::newAnonymousTransport,report,permit);
+        },workers); } catch(RuntimeException unavailable) {
+            report.fail(unavailable); return CompletableFuture.completedFuture(false);
+        }
+    }
+    CompletableFuture<NativeCasLogin.Identity> savedNativeAccount() {
+        final long revision=nativeDiagnostics.revision();
+        return CompletableFuture.supplyAsync(() -> {
+            try { return nativeLogin==null?null:nativeLogin.savedIdentity(); }
+            catch(Exception unavailable) {
+                nativeDiagnostics.failIfCurrent(revision,NativeCasDiagnostics.Kind.STORE_READ,NativeCasDiagnostics.Stage.STORE,unavailable); return null;
+            }
+        },workers);
+    }
+    /** Only MainActivity's native explicit button calls these methods. Never accept a
+     * password/authorization boolean from JS, intents, navigation or saved renderer data. */
+    boolean enableNativeValidation(NativeCasLogin.Identity saved) {
+        NativeCasLogin.Identity current=nativeAccount;
+        if(!nativeForeground || closed.get() || nativeLogin==null || saved==null || current!=null && (!current.id.equals(saved.id) || !current.user.equals(saved.user))) return false;
+        unauthorizedGeneration=-1; nativeValidationEnabled=true; return true;
+    }
+    CompletableFuture<Boolean> enrollNativeAccount(NativeCasLogin.Identity expected,char[] password) {
+        final long gen=instanceGeneration;
+        final long permit=nativeLogin==null?-1:nativeLogin.generation();
+        final NativeCasDiagnostics.Context report=nativeDiagnostics.begin(NativeCasDiagnostics.Kind.ENROLLMENT);
+        try { return CompletableFuture.supplyAsync(() -> {
+            try {
+                NativeCasLogin.Identity current=nativeAccount;
+                if(!nativeForeground || closed.get() || nativeLogin==null || expected==null || current==null || gen!=instanceGeneration
+                        || !expected.id.equals(current.id) || !expected.user.equals(current.user))
+                    throw NativeCasDiagnostics.failure(NativeCasDiagnostics.Stage.CONSENT,NativeCasDiagnostics.Category.AUTHORIZATION);
+                if(permit!=nativeLogin.generation()) throw NativeCasDiagnostics.failure(NativeCasDiagnostics.Stage.CONSENT,NativeCasDiagnostics.Category.CANCELLED);
+                final long enrolledGeneration;
+                synchronized(secretLock) {
+                    if(gen!=sessionGeneration || currentInstance!=this) throw NativeCasDiagnostics.failure(NativeCasDiagnostics.Stage.CONSENT,NativeCasDiagnostics.Category.CANCELLED);
+                    instanceGeneration=++sessionGeneration; // Discard old account HTTP/cookie work before enrollment.
+                    enrolledGeneration=instanceGeneration;
+                }
+                unauthorizedGeneration=-1;
+                boolean saved=nativeLogin.enrollAtGeneration(permit,true,expected.user,new String(password),expected.id,report);
+                synchronized(secretLock) {
+                    if(saved && enrolledGeneration==sessionGeneration && currentInstance==this && nativeForeground && !closed.get()) {
+                        nativeValidationEnabled=true; return true;
+                    }
+                }
+                return false;
+            } catch(Exception failure) { report.fail(failure); return false; }
+            finally { java.util.Arrays.fill(password,'\0'); }
+        },workers); } catch(RuntimeException unavailable) {
+            report.fail(unavailable); java.util.Arrays.fill(password,'\0'); return CompletableFuture.completedFuture(false);
+        }
+    }
+    private boolean silentLoginAfter401(long permit) throws Exception {
+        if(nativeLogin==null) return false;
+        if(permit!=nativeLogin.generation() || !nativeForeground || !nativeValidationEnabled || unauthorizedGeneration!=instanceGeneration || closed.get()) return false;
+        NativeCasLogin.Identity expected=nativeAccount;
+        if(expected==null) {
+            final long revision=nativeDiagnostics.revision();
+            try { expected=nativeLogin.savedIdentity(); }
+            catch(Exception unavailable) {
+                nativeDiagnostics.failIfCurrent(revision,NativeCasDiagnostics.Kind.AUTOMATIC,NativeCasDiagnostics.Stage.STORE,unavailable);
+                return false;
+            }
+        }
+        return nativeLogin.onUnauthorized(401,true,expected,permit);
+    }
     private JSONArray cookies(String address) throws Exception {
         JSONArray result = new JSONArray(); Set<String> origins;
         if (!address.isEmpty()) { URI uri = NativePolicy.https(address, true); origins = Collections.singleton(uri.toString()); }
+        else if(officialSession.active()) origins=new java.util.HashSet<>(java.util.Arrays.asList(
+                "https://classroom.zju.edu.cn/","https://interactivemeta.cmc.zju.edu.cn/"));
         else origins = new java.util.HashSet<>(cookieOrigins);
         Set<String> seen = new java.util.HashSet<>();
         for (String origin : origins) {
             URI uri = NativePolicy.https(origin, true); if (!NativePolicy.campus(uri)) continue;
-            String value = CookieManager.getInstance().getCookie(origin); if (value == null) continue;
+            String value = officialSession.header(uri);
+            if(value==null) value=CookieManager.getInstance().getCookie(origin);
+            if (value == null) continue;
             for (String part : value.split(";")) {
                 int separator = part.indexOf('='); if (separator <= 0) continue;
                 String name = part.substring(0, separator).trim(), content = part.substring(separator + 1).trim();
@@ -524,31 +752,84 @@ public final class NativeIO implements Closeable {
         String sameSite = data.optString("sameSite", "");
         if (sameSite.equalsIgnoreCase("strict") || sameSite.equalsIgnoreCase("lax") || sameSite.equalsIgnoreCase("none")) cookie.append("; SameSite=").append(sameSite);
         cookieOrigins.add(NativePolicy.origin(uri) + cookiePath);
-        CookieManager.getInstance().setCookie(uri.toString(), cookie.toString());
+        setCookieAndWait(uri.toString(), cookie.toString(),data.optLong("_sessionGeneration",-1),data.optLong("_nativeSessionVersion",-1));
     }
     private void removeCookie(JSONObject data) throws Exception {
         URI uri = NativePolicy.https(data.getString("url"), true);
         if (!NativePolicy.campus(uri)) throw new IOException("只能清理校园登录会话");
         String name = data.getString("name"); if (!name.matches("[!#$%&'*+.^_`|~0-9A-Za-z-]+")) throw new IOException("会话名称无效");
-        CookieManager manager = CookieManager.getInstance();
-        manager.setCookie(uri.toString(), name + "=; Path=/; Max-Age=0; Secure");
-        manager.setCookie(uri.toString(), name + "=; Path=/; Domain=" + uri.getHost() + "; Max-Age=0; Secure");
-        manager.setCookie(uri.toString(), name + "=; Path=/; Domain=zju.edu.cn; Max-Age=0; Secure");
+        long epoch=data.optLong("_sessionGeneration",-1), version=data.optLong("_nativeSessionVersion",-1);
+        setCookieAndWait(uri.toString(), name + "=; Path=/; Max-Age=0; Secure",epoch,version);
+        setCookieAndWait(uri.toString(), name + "=; Path=/; Domain=" + uri.getHost() + "; Max-Age=0; Secure",epoch,version);
+        setCookieAndWait(uri.toString(), name + "=; Path=/; Domain=zju.edu.cn; Max-Age=0; Secure",epoch,version);
     }
-    private void clearCookies() throws Exception {
+    private void setCookieAndWait(String origin, String cookie,long epoch,long version) throws Exception {
+        CompletableFuture<Boolean> done = new CompletableFuture<>();
+        main.post(() -> { try {
+            if(closed.get() || currentInstance!=this || epoch!=sessionGeneration || version!=officialSession.version())
+                throw new IOException("登录操作已取消");
+            CookieManager.getInstance().setCookie(origin, cookie, done::complete);
+        } catch (Exception error) { done.completeExceptionally(error); } });
+        if (!done.get(15, TimeUnit.SECONDS)) throw new IOException("Cookie 写入失败");
+    }
+    private void clearCookies(JSONObject data) throws Exception {
+        long epoch=data.optLong("_sessionGeneration",-1), version=data.optLong("_nativeSessionVersion",-1);
+        if(epoch!=sessionGeneration || version!=officialSession.version()) throw new IOException("登录操作已取消");
+        cancelNativeLogin();
+        long clearedVersion=officialSession.clearIfVersion(version); nativeAccount=null; unauthorizedGeneration=-1;
         // This app owns its WebView cookie store. Completion is observed before session logout completes.
         CompletableFuture<Void> done = new CompletableFuture<>();
-        main.post(() -> CookieManager.getInstance().removeAllCookies(value -> done.complete(null)));
+        main.post(() -> {
+            if(closed.get() || epoch!=sessionGeneration || clearedVersion!=officialSession.version()) {
+                done.completeExceptionally(new IOException("登录操作已取消")); return;
+            }
+            CookieManager.getInstance().removeAllCookies(value -> done.complete(null));
+        });
         done.get(15, TimeUnit.SECONDS); CookieManager.getInstance().flush(); clearResources();
     }
 
     private JSONObject request(JSONObject data) throws Exception {
+        final long loginPermit=data.optLong("_nativeLoginPermit",-1);
         Transfer transfer = new Transfer(); String id = data.optString("requestId", token());
         if (transfers.putIfAbsent(id, transfer) != null) throw new IOException("请求标识重复");
         if (queuedCancellations.remove(id) != null) { transfers.remove(id, transfer); throw new IOException("请求已取消"); }
+        try {
+        for(int attempt=0;attempt<2;attempt++) {
+        data.put("_nativeSessionVersion",officialSession.version());
         try (Connection connection = connect(data, transfer, false)) {
             byte[] bytes = readAll(connection.input, Math.min(DEFAULT_HTTP_LIMIT, limit(data, DEFAULT_HTTP_LIMIT)));
             if (transfer.cancelled.get()) throw new IOException("请求已取消");
+            if(NativePolicy.campus(connection.uri) && data.optLong("_sessionGeneration",-1)!=sessionGeneration)
+                throw new IOException("登录操作已取消");
+            boolean official401=connection.status==401 && "classroom.zju.edu.cn".equals(connection.uri.getHost());
+            String requestMethod=data.optString("method","GET");
+            boolean replaySafe=requestMethod.equalsIgnoreCase("GET") || requestMethod.equalsIgnoreCase("HEAD")
+                || requestMethod.equalsIgnoreCase("POST") && connection.uri.getPath().equals("/courseapi/v2/course/video-and-live-promission-by-user-id");
+            if(official401 && attempt==0 && replaySafe) {
+                if(data.optLong("_sessionGeneration",-1)!=instanceGeneration) throw new IOException("登录操作已取消");
+                connection.close();
+                boolean alreadyAdopted=data.optLong("_nativeSessionVersion",-1)!=officialSession.version() && officialSession.owns(connection.uri);
+                boolean authenticated=false;
+                if(!alreadyAdopted && nativeLogin!=null && loginPermit==nativeLogin.generation() && nativeValidationEnabled && nativeForeground
+                        && (connection.uri.equals(NativeOfficialSession.INFO) || officialAccountExpired(data,transfer))) {
+                    unauthorizedGeneration=instanceGeneration;
+                    authenticated=silentLoginAfter401(loginPermit);
+                }
+                alreadyAdopted |= data.optLong("_nativeSessionVersion",-1)!=officialSession.version() && officialSession.owns(connection.uri);
+                if(alreadyAdopted || authenticated) {
+                    if(transfer.cancelled.get() || data.optLong("_sessionGeneration",-1)!=instanceGeneration) throw new IOException("登录操作已取消");
+                    continue; // Retry only the original API request, never a second CAS attempt.
+                }
+            }
+            if(connection.status==200 && connection.uri.equals(NativeOfficialSession.INFO)) {
+                try {
+                    String[] identity=NativeCasIdentity.read(bytes);
+                    synchronized(secretLock) {
+                        if(data.optLong("_sessionGeneration",-1)==sessionGeneration)
+                            nativeAccount=new NativeCasLogin.Identity(identity[1],identity[0]);
+                    }
+                } catch(IOException notIdentity) { /* No native authorization is inferred from malformed JSON. */ }
+            }
             String mime = connection.mime.toLowerCase(Locale.ROOT);
             String expected = data.optString("expectDataType");
             boolean binary = data.optBoolean("binary") || expected.equals("ARRAY_BUFFER") ||
@@ -557,7 +838,31 @@ public final class NativeIO implements Closeable {
             if (!binary && connection.status >= 200 && connection.status < 300 && NativePolicy.campus(connection.uri))
                 sockets.trustMetadata(content);
             return object("status", connection.status, "headers", new JSONObject(connection.headers), "body", content, "base64", binary);
+        }
+        }
+        throw new IOException("登录失效，请手动登录");
         } finally { transfers.remove(id, transfer); }
+    }
+    /** A room/resource credential's 401 is not itself proof that the main account
+     * expired. Probe only fixed infosimple, with no redirects. Network/403/200 never
+     * cause a CAS submission or consume the stored one-shot allowance. */
+    private boolean officialAccountExpired(JSONObject original,Transfer transfer) {
+        try {
+            String cookie=officialSession.header(NativeOfficialSession.INFO);
+            if(cookie==null) cookie=CookieManager.getInstance().getCookie(NativeOfficialSession.ROOT.toString());
+            JSONObject headers=object("Accept","application/json");
+            if(cookie!=null) {
+                headers.put("Cookie",cookie); String bearer=NativeCasHttps.identityBearer(cookie);
+                if(!bearer.isEmpty()) headers.put("Authorization","Bearer "+bearer);
+            }
+            JSONObject probe=object("url",NativeOfficialSession.INFO.toString(),"method","GET","headers",headers,
+                "timeout",10000,"_noRedirects",true,
+                "_sessionGeneration",original.optLong("_sessionGeneration",-1),
+                "_nativeSessionVersion",officialSession.version());
+            try(Connection response=connect(probe,transfer,false)) {
+                return response.status==401 && response.uri.equals(NativeOfficialSession.INFO);
+            }
+        } catch(Exception notProven) { return false; }
     }
     private void startStream(String callbackId, JSONObject data) throws Exception {
         String id = data.getString("requestId"); Transfer transfer = new Transfer();
@@ -591,6 +896,7 @@ public final class NativeIO implements Closeable {
         if (value <= 0 || value > 64L * 1024 * 1024 * 1024) throw new IOException("响应大小限制无效"); return value;
     }
     private Connection connect(JSONObject data, Transfer transfer, boolean media) throws Exception {
+        if(!data.has("_nativeSessionVersion")) data.put("_nativeSessionVersion",officialSession.version());
         URI uri = NativePolicy.https(data.getString("url"), media);
         String method = data.optString("method", "GET").toUpperCase(Locale.ROOT);
         if (!(method.equals("GET") || method.equals("POST") || method.equals("HEAD") || method.equals("PUT") || method.equals("DELETE") || method.equals("PATCH")))
@@ -614,12 +920,18 @@ public final class NativeIO implements Closeable {
             connection.setUseCaches(false); connection.setRequestMethod(method);
             connection.setRequestProperty("Accept-Encoding", "identity");
             boolean campus = NativePolicy.campus(uri);
+            boolean nativeOfficial=officialSession.owns(uri);
             for (Map.Entry<String, String> entry : headers.entrySet()) {
                 // Campus credentials are never forwarded to media CDNs or AI hosts.
                 if (!NativePolicy.credentialHeaderAllowed(entry.getKey(), uri)) continue;
+                if(nativeOfficial && (entry.getKey().equalsIgnoreCase("Cookie") || entry.getKey().equalsIgnoreCase("Authorization"))) continue;
                 connection.setRequestProperty(entry.getKey(), entry.getValue());
             }
-            if (campus && !hasHeader(headers, "Cookie")) {
+            if(nativeOfficial) {
+                connection.setRequestProperty("Cookie",officialSession.header(uri));
+                String bearer=officialSession.bearer(uri);
+                if(bearer!=null && !bearer.isEmpty()) connection.setRequestProperty("Authorization","Bearer "+bearer);
+            } else if (campus && !hasHeader(headers, "Cookie")) {
                 String cookie = CookieManager.getInstance().getCookie(uri.toString());
                 if (cookie != null) connection.setRequestProperty("Cookie", cookie);
             }
@@ -630,13 +942,26 @@ public final class NativeIO implements Closeable {
                 }
                 int status = connection.getResponseCode();
                 if (transfer.cancelled.get() || closed.get()) throw new IOException("请求已取消");
-                if (campus) {
+                List<String> legacyCookies=new ArrayList<>();
+                if (campus) synchronized (secretLock) {
+                    if (data.optLong("_sessionGeneration", -1) != sessionGeneration || transfer.cancelled.get()) throw new IOException("登录操作已取消");
+                    if(data.optLong("_nativeSessionVersion",-1)!=officialSession.version()) {
+                        // A response from the pre-adoption account cannot mutate the adopted jar.
+                        if(status==401) return new Connection(connection,new ByteArrayInputStream(new byte[0]),uri,status,responseHeaders(connection),"application/json");
+                        throw new IOException("登录操作已取消");
+                    }
                     cookieOrigins.add(NativePolicy.origin(uri) + "/");
                     for (Map.Entry<String, List<String>> entry : connection.getHeaderFields().entrySet())
                         if (entry.getKey() != null && entry.getKey().equalsIgnoreCase("Set-Cookie"))
-                            for (String cookie : entry.getValue()) CookieManager.getInstance().setCookie(uri.toString(), cookie);
+                            for (String cookie : entry.getValue()) {
+                                if(!officialSession.receiveIfVersion(uri,cookie,data.optLong("_nativeSessionVersion",-1)))
+                                    legacyCookies.add(cookie);
+                            }
                 }
+                for(String cookie:legacyCookies)
+                    setCookieAndWait(uri.toString(),cookie,data.optLong("_sessionGeneration",-1),data.optLong("_nativeSessionVersion",-1));
                 if (status == 301 || status == 302 || status == 303 || status == 307 || status == 308) {
+                    if(data.optBoolean("_noRedirects")) return new Connection(connection,new ByteArrayInputStream(new byte[0]),uri,status,responseHeaders(connection),"text/plain");
                     String location = connection.getHeaderField("Location");
                     if (location == null || redirect == 5) throw new IOException("重定向次数过多或地址缺失");
                     URI next = NativePolicy.https(uri.resolve(location).toString(), media);
@@ -860,7 +1185,7 @@ public final class NativeIO implements Closeable {
         }
         String modified = header(supplied, "If-Range"); if (modified != null && !modified.matches("(?s).*[\r\n].*")) headers.put("If-Range", modified);
         Transfer transfer = new Transfer();
-        Connection connection = connect(object("url", value.remote.toString(), "method", method, "headers", headers, "timeout", 30000), transfer, true);
+        Connection connection = connect(object("url", value.remote.toString(), "method", method, "headers", headers, "timeout", 30000, "_sessionGeneration", instanceGeneration), transfer, true);
         int status = connection.status;
         if (status < 200 || status >= 300) {
             connection.close(); return failure(status >= 400 && status <= 599 ? status : 502, "Resource Error", "平台资源暂时不可用");
@@ -1067,6 +1392,8 @@ public final class NativeIO implements Closeable {
     }
     @Override public void close() {
         if (!closed.compareAndSet(false, true)) return;
+        cancelNativeLogin(); officialSession.cancelVerification(); officialSession.clear(); nativeAccount=null;
+        synchronized (secretLock) { if (currentInstance == this) { currentInstance = null; sessionGeneration++; } }
         for (Transfer transfer : transfers.values()) transfer.cancel(); transfers.clear(); queuedCancellations.clear(); sockets.closeAll(); clearResources();
         for (Handle handle : handles.values()) closeQuietly(handle.file); handles.clear();
         workers.shutdownNow(); streamWorkers.shutdownNow(); imageWorkers.shutdownNow(); clipboardWorkers.shutdownNow();

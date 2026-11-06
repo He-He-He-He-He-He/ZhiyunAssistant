@@ -40,15 +40,37 @@ func keychain(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=fals
         }
         var lookup=query;lookup[kSecUseAuthenticationUI as String]=allowUI ? kSecUseAuthenticationUIAllow : kSecUseAuthenticationUIFail;lookup[kSecReturnData as String]=true;lookup[kSecMatchLimit as String]=kSecMatchLimitOne
         var output:CFTypeRef?;let status=SecItemCopyMatching(lookup as CFDictionary,&output)
-        guard status==errSecSuccess else{if status != errSecItemNotFound{onError?(status)};return nil};return output as? Data
+        guard status==errSecSuccess else{if status != errSecItemNotFound{onError?(status)};return nil}
+        guard let value=output as? Data else{onError?(errSecDecode);return nil};return value
     })}catch{onError?(OSStatus((error as NSError).code));return nil}
+}
+// Create the shared master key without ever updating an existing item. Different
+// profiles/processes can race to initialize the same Keychain account.
+func createLocalSecretsKey(_ data:Data)throws->Data{
+    try withKeychainInteractionPolicy(allowUI:false,get:{
+        var allowed=DarwinBoolean(false);let status=SecKeychainGetUserInteractionAllowed(&allowed);guard status==errSecSuccess else{throw appError("钥匙串策略不可读",code:Int(status))};return allowed.boolValue
+    },set:{allowed in let status=SecKeychainSetUserInteractionAllowed(allowed);guard status==errSecSuccess else{throw appError("钥匙串策略不可设置",code:Int(status))}},operation:{
+        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"cn.suike.slides.mac",kSecAttrAccount as String:"local-secrets-key-v1",kSecValueData as String:data,kSecAttrAccessible as String:kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+        let status=SecItemAdd(query as CFDictionary,nil)
+        if status==errSecSuccess{return data}
+        guard status==errSecDuplicateItem else{throw appError("无法保存加密密钥",code:Int(status))}
+        var failure:OSStatus?;guard let existing=keychain("local-secrets-key-v1",onError:{failure=$0}) else{throw appError("无法读取加密密钥",code:Int(failure ?? errSecIO))};return existing
+    })
+}
+func legacyCredentialAccounts(_ name:String)throws->[String]{
+    try withKeychainInteractionPolicy(allowUI:false,get:{var allowed=DarwinBoolean(false);let s=SecKeychainGetUserInteractionAllowed(&allowed);guard s==errSecSuccess else{throw appError("无法读取钥匙串策略",code:Int(s))};return allowed.boolValue},set:{allowed in let s=SecKeychainSetUserInteractionAllowed(allowed);guard s==errSecSuccess else{throw appError("无法设置钥匙串策略",code:Int(s))}},operation:{
+        let query:[String:Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:"cn.suike.slides.mac",kSecReturnAttributes as String:true,kSecMatchLimit as String:kSecMatchLimitAll,kSecUseAuthenticationUI as String:kSecUseAuthenticationUIFail]
+        var output:CFTypeRef?;let status=SecItemCopyMatching(query as CFDictionary,&output)
+        if status==errSecItemNotFound{return []};guard status==errSecSuccess,let rows=output as? [[String:Any]] else{throw appError("无法检查旧钥匙串副本",code:Int(status == errSecSuccess ? errSecDecode:status))}
+        return rows.compactMap{$0[kSecAttrAccount as String] as? String}.filter{$0==name || $0.hasPrefix(name+"-app-")}
+    })
 }
 // A new ad-hoc build must not update an old build's ACL-protected item. Keep
 // secrets in Keychain; this owner-only index contains item names, never values.
 final class CredentialSlots {
     typealias Backend=(String,Data?,Bool,Bool,@escaping(OSStatus)->Void)->Data?
-    private let indexURL:URL,tag:String,backend:Backend
-    init(indexURL:URL,tag:String,backend:@escaping Backend){self.indexURL=indexURL;self.tag=tag;self.backend=backend}
+    private let indexURL:URL,tag:String,backend:Backend,list:((String)throws->[String])?
+    init(indexURL:URL,tag:String,list:((String)throws->[String])?=nil,backend:@escaping Backend){self.indexURL=indexURL;self.tag=tag;self.list=list;self.backend=backend}
     private func index()->[String:String]{guard let data=try? Data(contentsOf:indexURL),data.count<256*1024 else{return [:]};return (try? JSONDecoder().decode([String:String].self,from:data)) ?? [:]}
     private func record(_ logical:String,_ slot:String)throws{
         var rows=index();rows[logical]=slot
@@ -59,9 +81,16 @@ final class CredentialSlots {
     func access(_ name:String,_ data:Data?,remove:Bool,allowUI:Bool=false,onError:@escaping(OSStatus)->Void)->Data?{
         let slot=name+"-app-"+tag,previous=index()[name]
         if remove{
-            // Tombstone first: an inaccessible legacy item must never reappear.
-            do{try record(name,"")}catch{onError(errSecIO);return nil}
-            _ = backend(slot,nil,true,allowUI){onError($0)};return nil
+            // Keep the known old slot across failed deletion and retries.
+            let pendingKey=name+"-pending-delete",pending=index()[pendingKey]
+            do{
+                if let previous,previous.hasPrefix(name+"-app-"){try record(pendingKey,previous)}
+                try record(name,"")
+                var candidates=Set([slot,name]);if let previous,previous.hasPrefix(name+"-app-"){candidates.insert(previous)};if let pending,pending.hasPrefix(name+"-app-"){candidates.insert(pending)}
+                if let list{candidates.formUnion(try list(name))}
+                var failed=false;for candidate in candidates{_ = backend(candidate,nil,true,allowUI){failed=true;onError($0)}}
+                if !failed{try record(pendingKey,"")}
+            }catch{onError(errSecIO)};return nil
         }
         if let data=data{
             guard let stored=backend(slot,data,false,allowUI,onError) else{return nil}
@@ -85,6 +114,115 @@ final class CredentialSlots {
     }
 }
 
+// Saved session keys, the remembered campus login and personal API keys live in one
+// AES-GCM file (owner-only). In a release signed with a Developer ID, its random key is
+// held by the system Keychain, whose access rule follows the stable team signature, so
+// updates keep it without prompts and other programs cannot read it. Unsigned local
+// builds change signature on every build, so there the key is derived from this Mac's
+// hardware UUID and a per-install salt: the file is useless on another Mac, but other
+// programs of the same macOS user could read it (the privacy page says so).
+final class LocalSecretStore {
+    typealias KeyStore=(Data?)throws->Data?
+    private let url:URL,saltURL:URL,lockURL:URL,tombstoneURL:URL,lock=NSLock(),keyStore:KeyStore?
+    init(root:URL,keyStore:KeyStore?=nil){url=root.appendingPathComponent("secrets.sealed");saltURL=root.appendingPathComponent("secrets.salt");lockURL=root.appendingPathComponent("secrets.lock");tombstoneURL=root.appendingPathComponent("secrets-deleted.json");self.keyStore=keyStore}
+    private func locked<T>(_ operation:()throws->T)throws->T{
+        lock.lock();defer{lock.unlock()}
+        try FileManager.default.createDirectory(at:lockURL.deletingLastPathComponent(),withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let fd=open(lockURL.path,O_CREAT|O_RDWR,0o600);guard fd>=0 else{throw appError("无法锁定本机加密资料")}
+        defer{close(fd)};guard flock(fd,LOCK_EX)==0 else{throw appError("无法锁定本机加密资料")};defer{flock(fd,LOCK_UN)}
+        return try operation()
+    }
+    private func tombstones()throws->Set<String>{
+        guard FileManager.default.fileExists(atPath:tombstoneURL.path) else{return []}
+        return Set(try JSONDecoder().decode([String].self,from:Data(contentsOf:tombstoneURL)))
+    }
+    private func recordTombstones(_ names:Set<String>)throws{try writePrivate(JSONEncoder().encode(names.sorted()),to:tombstoneURL)}
+    func isRemoved(_ name:String)throws->Bool{try locked{try tombstones().contains(name)}}
+    static func machineIdentifier()->Data?{
+        var uuid=[UInt8](repeating:0,count:16);var wait=timespec(tv_sec:1,tv_nsec:0)
+        guard gethostuuid(&uuid,&wait)==0,uuid.contains(where:{$0 != 0}) else{return nil};return Data(uuid)
+    }
+    // True for Developer ID (team-signed) builds; false for ad-hoc local builds.
+    static var teamSigned:Bool{
+        var code:SecCode?;guard SecCodeCopySelf([],&code)==errSecSuccess,let code else{return false}
+        var staticCode:SecStaticCode?;guard SecCodeCopyStaticCode(code,[],&staticCode)==errSecSuccess,let staticCode else{return false}
+        var info:CFDictionary?;guard SecCodeCopySigningInformation(staticCode,SecCSFlags(rawValue:kSecCSSigningInformation),&info)==errSecSuccess,let values=info as? [String:Any] else{return false}
+        return (values[kSecCodeInfoTeamIdentifier as String] as? String)?.isEmpty == false
+    }
+    private func writePrivate(_ data:Data,to target:URL)throws{
+        let folder=target.deletingLastPathComponent();try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let temp=folder.appendingPathComponent("."+UUID().uuidString+".tmp")
+        let fd=open(temp.path,O_WRONLY|O_CREAT|O_EXCL,0o600);guard fd>=0 else{throw appError("无法保存本机加密资料")}
+        defer{close(fd);try? FileManager.default.removeItem(at:temp)}
+        let written=data.withUnsafeBytes{bytes in Darwin.write(fd,bytes.baseAddress,bytes.count)==bytes.count}
+        guard written,fsync(fd)==0,rename(temp.path,target.path)==0 else{throw appError("无法保存本机加密资料")}
+    }
+    private func key(create:Bool)throws->SymmetricKey?{
+        if let keyStore{
+            if let stored=try keyStore(nil){guard stored.count==32 else{throw appError("系统钥匙串中的加密密钥无效")};return SymmetricKey(data:stored)}
+            guard create else{return nil}
+            let fresh=SymmetricKey(size:.bits256).withUnsafeBytes{Data($0)}
+            guard let stored=try keyStore(fresh),stored.count==32,try keyStore(nil)==stored else{throw appError("无法把加密密钥保存到系统钥匙串")}
+            return SymmetricKey(data:stored)
+        }
+        return try deviceKey(create:create)
+    }
+    private func deviceKey(create:Bool)throws->SymmetricKey?{
+        guard let machine=LocalSecretStore.machineIdentifier() else{return nil}
+        var salt=try? Data(contentsOf:saltURL)
+        if salt?.count != 32{
+            guard create else{return nil}
+            let fresh=SymmetricKey(size:.bits256).withUnsafeBytes{Data($0)};try writePrivate(fresh,to:saltURL);salt=fresh
+        }
+        return HKDF<SHA256>.deriveKey(inputKeyMaterial:SymmetricKey(data:machine),salt:salt!,info:Data("zhiyun-local-secrets-v1".utf8),outputByteCount:32)
+    }
+    private func unseal(_ sealed:Data,_ key:SymmetricKey?)->[String:Data]?{
+        guard let key,let box=try? AES.GCM.SealedBox(combined:sealed),let plain=try? AES.GCM.open(box,using:key) else{return nil}
+        return try? JSONDecoder().decode([String:Data].self,from:plain)
+    }
+    private func load()throws->[String:Data]{
+        guard FileManager.default.fileExists(atPath:url.path) else{return [:]}
+        let sealed=try Data(contentsOf:url)
+        guard sealed.count<=1024*1024 else{throw appError("本机加密资料过大，无法读取")}
+        let rows:[String:Data]
+        if let decoded=unseal(sealed,try? key(create:false)){rows=decoded}
+        else if keyStore != nil,let earlier=unseal(sealed,try? deviceKey(create:false)){
+            // First signed launch after unsigned builds: move the data under the Keychain key.
+            rows=earlier;if (try? save(earlier)) != nil{try? FileManager.default.removeItem(at:saltURL)}
+        }else{
+            // Never mistake an unavailable key or damaged ciphertext for an empty store.
+            // A later write must not replace the only copy of existing credentials.
+            throw appError("无法解密本机资料，已保留原文件")
+        }
+        return rows
+    }
+    private func save(_ rows:[String:Data])throws{
+        guard let key=try key(create:true) else{throw appError("无法保存本机加密资料")}
+        let plain=try JSONEncoder().encode(rows);guard plain.count<=768*1024 else{throw appError("本机加密资料过大")}
+        guard let combined=try AES.GCM.seal(plain,using:key).combined else{throw appError("无法保存本机加密资料")}
+        try writePrivate(combined,to:url)
+    }
+    func get(_ name:String)throws->Data?{try locked{if try tombstones().contains(name){return nil};return try load()[name]}}
+    // The legacy lookup and migration share the same cross-process lock as deletion.
+    func getOrMigrate(_ name:String,legacy:()throws->Data?)throws->Data?{try locked{
+        if try tombstones().contains(name){return nil}
+        var rows=try load();if let value=rows[name]{return value}
+        guard let value=try legacy() else{return nil};rows[name]=value;try save(rows);return value
+    }}
+    @discardableResult func set(_ name:String,_ data:Data)->Bool{do{return try locked{
+        var rows=try load();rows[name]=data;try save(rows)
+        var deleted=try tombstones();if deleted.remove(name) != nil{try recordTombstones(deleted)};return true
+    }}catch{return false}}
+    @discardableResult func setIfNotRemoved(_ name:String,_ data:Data)->Bool{do{return try locked{
+        guard try !tombstones().contains(name) else{return false}
+        var rows=try load();guard rows[name]==nil else{return rows[name]==data};rows[name]=data;try save(rows);return true
+    }}catch{return false}}
+    @discardableResult func remove(_ name:String)->Bool{do{return try locked{
+        var deleted=try tombstones();deleted.insert(name);try recordTombstones(deleted)
+        var rows=try load();if rows.removeValue(forKey:name) != nil{try save(rows)};return true
+    }}catch{return false}}
+}
+
 // Personal AI keys use the system Keychain. A legacy plaintext key is removed
 // only after a successful Keychain write and readback. Fail closed on failure.
 func fileStoredCredential(_ name:String)->Bool{name.hasSuffix("-deepseek")}
@@ -101,7 +239,7 @@ final class ServiceKeyStore {
         let written=data.withUnsafeBytes{bytes in Darwin.write(fd,bytes.baseAddress,bytes.count)==bytes.count};close(fd)
         guard written,rename(temp.path,url.path)==0 else{try? fm.removeItem(at:temp);throw appError("无法保存密钥")}
     }
-    func access(_ name:String,_ data:Data?,remove:Bool,onError:@escaping(OSStatus)->Void,legacy:Legacy)->Data?{
+    func access(_ name:String,_ data:Data?,remove:Bool,onError:@escaping(OSStatus)->Void,legacyFailed:()->Bool={false},canMigrate:()throws->Bool={true},legacy:Legacy)->Data?{
         var rows=read(url) ?? [:]
         if remove{
             _=legacy(nil,true)
@@ -113,6 +251,8 @@ final class ServiceKeyStore {
             rows.removeValue(forKey:name);do{try save(rows)}catch{onError(errSecIO);return nil};return data
         }
         if let secured=legacy(nil,false){return secured}
+        guard !legacyFailed() else{return nil}
+        do{guard try canMigrate() else{return nil}}catch{onError(errSecIO);return nil}
         guard let text=rows[name] ?? earlier.flatMap({read($0)?[name]}),let old=text.data(using:.utf8) else{return nil}
         guard legacy(old,false) != nil,legacy(nil,false)==old else{onError(errSecAuthFailed);return nil}
         rows.removeValue(forKey:name);do{try save(rows)}catch{onError(errSecIO);return nil};return old
@@ -121,15 +261,19 @@ final class ServiceKeyStore {
 
 final class KeychainMemoryCache {
     typealias Backend=(String,Data?,Bool,Bool,@escaping(OSStatus)->Void)->Data?
-    private let backend:Backend
+    private let backend:Backend,cacheEnabled:()->Bool
     private var values=[String:Data](),loaded=Set<String>(),blocked=[String:OSStatus](),failedWrites=[String:Data]()
-    init(backend:@escaping Backend){self.backend=backend}
+    init(cacheEnabled:@escaping()->Bool={true},backend:@escaping Backend){self.cacheEnabled=cacheEnabled;self.backend=backend}
     func requiresAuthorization(_ names:[String])->Bool{names.contains{blocked[$0] != nil}}
     func invalidate(){values.removeAll();loaded.removeAll();blocked.removeAll();failedWrites.removeAll()}
     func access(_ name:String,_ data:Data?=nil,remove:Bool=false,allowUI:Bool=false,onError:((OSStatus)->Void)?=nil)->Data?{
+        if !cacheEnabled(){
+            var failure:OSStatus?;let result=backend(name,data,remove,allowUI){failure=$0}
+            if let failure{blocked[name]=failure;onError?(failure);return nil};blocked.removeValue(forKey:name);return result
+        }
         if !remove,let data=data,loaded.contains(name),values[name]==data,blocked[name]==nil{return data}
         if !remove,data==nil,loaded.contains(name),(!allowUI || blocked[name]==nil){if let error=blocked[name]{onError?(error)};return values[name]}
-        if !allowUI,let error=blocked[name]{onError?(error);return nil}
+        if !remove,!allowUI,let error=blocked[name]{onError?(error);return nil}
         if !remove,!allowUI,let data=data,failedWrites[name]==data{onError?(errSecInteractionNotAllowed);return nil}
         var failure:OSStatus?;let result=backend(name,data,remove,allowUI){failure=$0}
         if let status=failure{if status==errSecInteractionNotAllowed || status==errSecAuthFailed || status==errSecUserCanceled{blocked[name]=status};onError?(status)}
@@ -144,10 +288,25 @@ final class KeychainMemoryCache {
 // their encrypted snapshot never treats the account identity as proof of access.
 let persistedSessionCredential = "session-cookies-v2"
 let officialLoginCredential = "official-login-v1"
-func logoutMarker(in root:URL)->URL{root.appendingPathComponent("session-logged-out")}
-func writeLogoutMarker(in root:URL)throws{
-    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true);try Data("1".utf8).write(to:logoutMarker(in:root),options:.atomic)
+// Password submission has not passed release acceptance. No setting or saved
+// credential may enable it in this release; manual official login remains available.
+let automaticPasswordSubmissionEnabled = false
+func withSessionStateLock<T>(in root:URL,_ body:()throws->T)throws->T{
+    try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+    let fd=open(root.appendingPathComponent("session-state.lock").path,O_CREAT|O_RDWR,0o600);guard fd>=0 else{throw appError("无法锁定登录状态")};defer{close(fd)}
+    guard flock(fd,LOCK_EX)==0 else{throw appError("无法锁定登录状态")};defer{flock(fd,LOCK_UN)};return try body()
 }
+func sessionEpoch(in root:URL)throws->String{
+    let path=root.appendingPathComponent("session-epoch")
+    guard FileManager.default.fileExists(atPath:path.path) else{return "initial"}
+    let value=try String(contentsOf:path,encoding:.utf8);guard !value.isEmpty,value.utf8.count<256 else{throw appError("登录状态损坏")};return value
+}
+func logoutMarker(in root:URL)->URL{root.appendingPathComponent("session-logged-out")}
+func writeLogoutMarkerLocked(in root:URL)throws{
+    try Data("1".utf8).write(to:logoutMarker(in:root),options:.atomic)
+    try Data(UUID().uuidString.utf8).write(to:root.appendingPathComponent("session-epoch"),options:.atomic)
+}
+func writeLogoutMarker(in root:URL)throws{try withSessionStateLock(in:root){try writeLogoutMarkerLocked(in:root)}}
 func removeLogoutMarker(in root:URL)throws{
     let path=logoutMarker(in:root);if FileManager.default.fileExists(atPath:path.path){try FileManager.default.removeItem(at:path)}
 }
@@ -277,10 +436,15 @@ button.click(); return 'submitted';
 // system Keychain. A legacy file key is retained until protected storage has
 // been verified. Ad-hoc updates may require explicit system authorization.
 final class SessionVault {
-    typealias KeyStore=(Data?,Bool)->Data?
+    typealias KeyStore=(Data?,Bool)throws->Data?
     let root:URL
-    private let keyStore:KeyStore?
+    private let keyStore:KeyStore?,lock=NSLock()
     init(root:URL,keyStore:KeyStore?=nil){self.root=root;self.keyStore=keyStore}
+    private func locked<T>(_ operation:()throws->T)throws->T{
+        lock.lock();defer{lock.unlock()};try FileManager.default.createDirectory(at:root,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        let fd=open(root.appendingPathComponent("session.lock").path,O_CREAT|O_RDWR,0o600);guard fd>=0 else{throw appError("无法锁定登录会话")};defer{close(fd)}
+        guard flock(fd,LOCK_EX)==0 else{throw appError("无法锁定登录会话")};defer{flock(fd,LOCK_UN)};return try operation()
+    }
     private var keyURL:URL{root.appendingPathComponent("session-key.bin")}
     private func key(create:Bool)throws->Data?{
         guard let store=keyStore else{
@@ -288,15 +452,15 @@ final class SessionVault {
             guard create else{return nil}
             let value=SymmetricKey(size:.bits256).withUnsafeBytes{Data($0)};try write(value,to:keyURL);return value
         }
-        if let secured=store(nil,false),secured.count==32{return secured}
+        if let secured=try store(nil,false),secured.count==32{return secured}
         if let old=try? Data(contentsOf:keyURL),old.count==32{
-            if store(old,false)==old,store(nil,false)==old{try? FileManager.default.removeItem(at:keyURL)}
+            if (try? store(old,false))==old,(try? store(nil,false))==old{try? FileManager.default.removeItem(at:keyURL)}
             return old // Preserve a readable legacy session if authorization was denied.
         }
         guard create else{return nil}
         guard !FileManager.default.fileExists(atPath:dataURL.path) else{throw appError("登录会话暂时无法解锁，请允许系统授权或重新登录")}
         let value=SymmetricKey(size:.bits256).withUnsafeBytes{Data($0)}
-        guard store(value,false)==value,store(nil,false)==value else{throw appError("无法安全保存登录会话，请重新登录或允许系统授权")}
+        guard try store(value,false)==value,try store(nil,false)==value else{throw appError("无法安全保存登录会话，请重新登录或允许系统授权")}
         return value
     }
     private var dataURL:URL{root.appendingPathComponent("session.sealed")}
@@ -308,16 +472,20 @@ final class SessionVault {
         let written=data.withUnsafeBytes{bytes in Darwin.write(fd,bytes.baseAddress,bytes.count)==bytes.count}
         guard written,rename(temp.path,url.path)==0 else{throw appError("无法保存登录会话")}
     }
-    func read()->Data? {
+    func read()->Data? {try? locked{
         guard let key=try? key(create:false),key.count==32,let data=try? Data(contentsOf:dataURL),data.count<=3*1024*1024,let box=try? AES.GCM.SealedBox(combined:data) else{return nil}
         return try? AES.GCM.open(box,using:SymmetricKey(data:key))
-    }
-    func save(_ data:Data)throws {
+    }}
+    func save(_ data:Data)throws {try locked{
         guard data.count<=2*1024*1024 else{throw appError("会话数据过大")}
         guard let bytes=try key(create:true) else{throw appError("无法安全保存登录会话")}
         let box=try AES.GCM.seal(data,using:SymmetricKey(data:bytes));guard let combined=box.combined else{throw appError("无法保存登录会话")};try write(combined,to:dataURL)
-    }
-    func remove(){try? FileManager.default.removeItem(at:dataURL);try? FileManager.default.removeItem(at:keyURL);_ = keyStore?(nil,true)}
+    }}
+    @discardableResult func remove()->Bool{(try? locked{
+        var success=true
+        for url in [dataURL,keyURL] where FileManager.default.fileExists(atPath:url.path){do{try FileManager.default.removeItem(at:url)}catch{success=false}}
+        do{_ = try keyStore?(nil,true)}catch{success=false};return success
+    }) ?? false}
 }
 func requestedByteRange(_ value:String?,size:Int)throws->(start:Int,end:Int,partial:Bool){
     guard size>=0 else{throw appError("文件大小无效")};guard let value=value else{return (0,max(0,size-1),false)}
@@ -586,6 +754,9 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     #endif
     let storageQueue=DispatchQueue(label:"cn.suike.mac.storage",qos:.utility)
     var loggingOut=false, lastWebRecovery=Date.distantPast
+    // Epoch is bound to this process until a new, explicit login is started.
+    lazy var processSessionEpoch:String? = try? withSessionStateLock(in:root){try sessionEpoch(in:root)}
+    var explicitLoginEpoch:String?
     var sessionNeedsResume=false
     private var latestCookieSnapshot:Data?
     private var sessionCookieObservationStarted=false
@@ -594,9 +765,30 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         if testKeychainOperation != nil || testSessionKeychain != nil{return SessionVault(root:root.appendingPathComponent("Session",isDirectory:true))}
         #endif
         return SessionVault(root:root.appendingPathComponent("Session",isDirectory:true)){[unowned self] value,remove in
-            self.credentialSlots.access("session-vault-key",value,remove:remove,onError:{_ in})
+            var failure:OSStatus?;let result=self.secretAccess("session-vault-key",value,remove:remove,allowUI:false,onError:{failure=$0})
+            if let failure{throw appError("无法处理会话密钥",code:Int(failure))};return result
         }
     }()
+    private lazy var localSecrets:LocalSecretStore={
+        #if NATIVE_CONTRACT_TESTS
+        if testKeychainOperation != nil || testSessionKeychain != nil{return LocalSecretStore(root:root)}
+        #endif
+        guard LocalSecretStore.teamSigned else{return LocalSecretStore(root:root)}
+        return LocalSecretStore(root:root){value in
+            if let value{return try createLocalSecretsKey(value)}
+            var failure:OSStatus?;let result=keychain("local-secrets-key-v1",onError:{failure=$0})
+            if let failure{throw appError("无法读取加密密钥",code:Int(failure))};return result
+        }
+    }()
+    // Local encrypted store first; an older Keychain item is read once, silently, and migrated.
+    func secretAccess(_ name:String,_ data:Data?,remove:Bool,allowUI:Bool,onError:@escaping(OSStatus)->Void)->Data?{
+        if remove{guard localSecrets.remove(name) else{onError(errSecIO);return nil};_ = credentialSlots.access(name,nil,remove:true,allowUI:false,onError:onError);return nil}
+        if let data{guard localSecrets.set(name,data) else{onError(errSecIO);return nil};return data}
+        do{return try localSecrets.getOrMigrate(name){
+            var failure:OSStatus?;let value=self.credentialSlots.access(name,nil,remove:false,allowUI:allowUI,onError:{failure=$0})
+            if let failure{throw appError("无法读取旧凭据",code:Int(failure))};return value
+        }}catch{onError(OSStatus((error as NSError).domain == "智云助手" ? (error as NSError).code : Int(errSecIO)));return nil}
+    }
     private var sessionProbeActive=false
     private var automaticLoginAttempted=false
     private var loginCompletionPending=false,loginVisitedAuthentication=false
@@ -604,21 +796,33 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     private var accountGeneration=UUID()
     private var pendingAI=Set<String>(),cancelledAI=Set<String>()
     // Automatic reads stay silent; explicit recovery can request system authorization.
-    lazy var credentialCache=KeychainMemoryCache{[unowned self] name,data,remove,allowUI,onError in
+    lazy var credentialCache=KeychainMemoryCache(cacheEnabled:{[unowned self] in
+        #if NATIVE_CONTRACT_TESTS
+        return self.testKeychainOperation != nil || self.testSessionKeychain != nil
+        #else
+        return false
+        #endif
+    }){[unowned self] name,data,remove,allowUI,onError in
         #if NATIVE_CONTRACT_TESTS
         if let operation=self.testKeychainOperation{return operation(name,data,remove,allowUI,onError)}
         if let storage=self.testSessionKeychain{return storage(name,data,remove)}
         #endif
         if fileStoredCredential(name){
-            return self.serviceKeys.access(name,data,remove:remove,onError:onError){value,remove in self.credentialSlots.access(name,value,remove:remove,allowUI:allowUI,onError:onError)}
+            var failure:OSStatus?
+            return self.serviceKeys.access(name,data,remove:remove,onError:onError,legacyFailed:{failure != nil},canMigrate:{try !self.localSecrets.isRemoved(name)}){value,removing in
+                if data==nil && !remove,let value{
+                    guard self.localSecrets.setIfNotRemoved(name,value) else{failure=errSecIO;onError(errSecIO);return nil};return value
+                }
+                return self.secretAccess(name,value,remove:removing,allowUI:allowUI,onError:{failure=$0;onError($0)})
+            }
         }
-        return self.credentialSlots.access(name,data,remove:remove,allowUI:allowUI,onError:onError)
+        return self.secretAccess(name,data,remove:remove,allowUI:allowUI,onError:onError)
     }
     private lazy var serviceKeys=ServiceKeyStore(url:root.appendingPathComponent("service-keys.json"))
     private lazy var credentialSlots:CredentialSlots={
         let bytes=Bundle.main.executableURL.flatMap{try? Data(contentsOf:$0,options:.mappedIfSafe)} ?? Data("unknown-build".utf8)
         let tag=SHA256.hash(data:bytes).prefix(12).map{String(format:"%02x",$0)}.joined()
-        return CredentialSlots(indexURL:root.appendingPathComponent("credential-slots.json"),tag:tag){name,data,remove,allowUI,onError in
+        return CredentialSlots(indexURL:root.appendingPathComponent("credential-slots.json"),tag:tag,list:legacyCredentialAccounts){name,data,remove,allowUI,onError in
             keychain(name,data,remove:remove,allowUI:allowUI,onError:onError)
         }
     }()
@@ -972,46 +1176,63 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard let data=sessionKeychain("identity"),let text=String(data:data,encoding:.utf8),let valid=try? normalizedIdentity(text) else{return ""}
         try? saveIdentity(text);return String(data:valid,encoding:.utf8) ?? ""
     }
-    func saveIdentity(_ text:String,allowUI:Bool=false)throws{
-        let data=try normalizedIdentity(text)
-        try fm.createDirectory(at:root,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
-        try data.write(to:profileIdentityURL(),options:.atomic);try fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:profileIdentityURL().path)
-        try removeLogoutMarker(in:root)
+    func clearLoggedOutSessionBeforeSignIn()throws{
+        guard hasLogoutMarker() else{return}
+        var failed=false
+        for name in [persistedSessionCredential,"cookies","identity"]{_ = sessionKeychain(name,remove:true,onError:{_ in failed=true})}
+        if !sessionVault.remove(){failed=true}
+        guard !failed else{throw appError("旧会话未能清除，请重试退出后再登录")}
+    }
+    func saveIdentity(_ text:String,allowUI:Bool=false,expectedEpoch:String?=nil,loginEpoch:String?=nil)throws{
+        let data=try normalizedIdentity(text),expected=expectedEpoch ?? processSessionEpoch,explicit=loginEpoch ?? explicitLoginEpoch
+        try withSessionStateLock(in:root){
+            guard let expected,try sessionEpoch(in:root)==expected else{throw appError("登录状态已更改，请重新登录")}
+            if hasLogoutMarker(){guard explicit==expected else{throw appError("请重新登录后再保存账号")};try clearLoggedOutSessionBeforeSignIn()}
+            if let old=try? Data(contentsOf:profileIdentityURL()),let before=try? JSONSerialization.jsonObject(with:old) as? [String:Any],let after=try? JSONSerialization.jsonObject(with:data) as? [String:Any],let previous=before["id"] as? String,let next=after["id"] as? String,previous != next{try disableOfficialLogin()}
+            try fm.createDirectory(at:root,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+            try data.write(to:profileIdentityURL(),options:.atomic);try fm.setAttributes([.posixPermissions:0o600],ofItemAtPath:profileIdentityURL().path)
+            if hasLogoutMarker(){try removeLogoutMarker(in:root)}
+        }
     }
     func clearPreparedImages(){imagePreparationGeneration=UUID();preparedDrags.removeAll();preparedDragOrder.removeAll();lastMouseDrag=nil;event("imageDragCacheCleared",true)}
-    func performLogout(_ id:String){
+    func performLogout(_ id:String,epoch:String){
         loggingOut=true;accountGeneration=UUID();credentialUIAllowed=false;cancelledAI.formUnion(pendingAI);finishSession(false,generation:sessionGeneration);sessionNeedsResume=false;clearPreparedImages();updateToolbar(name:"",loggedIn:false)
         for operation in pendingRequests{cancelledRequests.insert(operation)};for operation in pendingDownloads.keys{cancelledDownloads.insert(operation)}
         requests.values.forEach{$0.cancel()};requests.removeAll();downloads.values.forEach{$0.cancel()};streams.values.forEach{$0.session.invalidateAndCancel()};login?.close()
         store.httpCookieStore.getAllCookies{cookies in
             let group=DispatchGroup();for cookie in cookies{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
             group.notify(queue:.main){self.storageQueue.async{
-                let error={(status:OSStatus) in self.diagnostic("Session keychain removal failed: "+String(status))}
-                _=self.sessionKeychain(persistedSessionCredential,remove:true,onError:error);_=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);self.credentialCache.invalidate();self.latestCookieSnapshot=nil;self.sessionVault.remove();try? self.fm.removeItem(at:self.profileIdentityURL())
-                DispatchQueue.main.async{self.account="guest";self.reply(id,true)}
+                var failed=false;let error={(status:OSStatus) in failed=true;self.diagnostic("Session keychain removal failed: "+String(status))}
+                do{try withSessionStateLock(in:self.root){
+                    guard try sessionEpoch(in:self.root)==epoch,self.hasLogoutMarker() else{throw appError("登录状态已更改")}
+                    _=self.sessionKeychain(persistedSessionCredential,remove:true,onError:error);_=self.sessionKeychain("cookies",remove:true,onError:error);_=self.sessionKeychain("identity",remove:true,onError:error);_=self.sessionKeychain(officialLoginCredential,remove:true,onError:error);try? self.fm.removeItem(at:self.automaticLoginAttentionURL);self.credentialCache.invalidate();self.latestCookieSnapshot=nil;if !self.sessionVault.remove(){failed=true}
+                    if self.fm.fileExists(atPath:self.profileIdentityURL().path){do{try self.fm.removeItem(at:self.profileIdentityURL())}catch{failed=true}}
+                }}catch{failed=true}
+                DispatchQueue.main.async{self.account="guest";if failed{self.reply(id,nil,"已停止自动登录，但部分本机凭据未能删除，请重试退出")}else{self.reply(id,true)}}
             }}
         }
     }
-    // Explicit sign-out prevents restoration in the current run. On the next
-    // launch, a saved credential explicitly enables a fresh official login.
-    func prepareAutomaticLoginAfterRestart(_ done:@escaping()->Void){
-        guard hasLogoutMarker() else{done();return}
-        storageQueue.async{
-            let available=self.sessionKeychain(officialLoginCredential).flatMap{try? JSONDecoder().decode(OfficialLoginCredentials.self,from:$0)}?.valid == true
-            if available{try? removeLogoutMarker(in:self.root)}
-            DispatchQueue.main.async{done()}
-        }
-    }
+    // A logout marker remains authoritative across restarts, even if a failed
+    // credential deletion left an older saved password behind. Only an explicit
+    // successful sign-in or save may clear it.
+    func prepareAutomaticLoginAfterRestart(_ done:@escaping()->Void){done()}
     func restoreCookies(_ done:@escaping()->Void){
+        _ = processSessionEpoch
         if cookieRestoreComplete{done();return};cookieRestoreCallbacks.append(done);guard !cookieRestoreStarted else{return};cookieRestoreStarted=true
         let finish={self.cookieRestoreComplete=true;let callbacks=self.cookieRestoreCallbacks;self.cookieRestoreCallbacks.removeAll();callbacks.forEach{$0()}}
         store.httpCookieStore.getAllCookies{existing in
             if self.hasLogoutMarker(){let group=DispatchGroup();for cookie in existing{group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}};group.notify(queue:.main){self.sessionNeedsResume=false;finish()};return}
             self.storageQueue.async{
-                let current=self.sessionVault.read() ?? self.sessionKeychain(persistedSessionCredential)
-                let data=current ?? (self.sessionKeychain("cookies") ?? Data())
+                let epoch=self.processSessionEpoch
+                let data:Data=(try? withSessionStateLock(in:self.root){
+                    guard let epoch,try sessionEpoch(in:self.root)==epoch,!self.hasLogoutMarker() else{return Data()}
+                    return self.sessionVault.read() ?? self.sessionKeychain(persistedSessionCredential) ?? self.sessionKeychain("cookies") ?? Data()
+                }) ?? Data()
                 let saved=cookiesToRestore(decodedCookies(data),over:existing)
-                DispatchQueue.main.async{self.installCookies(saved){self.store.httpCookieStore.getAllCookies{current in self.sessionNeedsResume=bearerNeedsRenewal(campusBearer(current));self.persistCookies{finish()}}}}
+                DispatchQueue.main.async{
+                    guard let epoch,(try? withSessionStateLock(in:self.root){try sessionEpoch(in:self.root)==epoch && !self.hasLogoutMarker()}) == true else{finish();return}
+                    self.installCookies(saved){self.store.httpCookieStore.getAllCookies{current in self.sessionNeedsResume=bearerNeedsRenewal(campusBearer(current));self.persistCookies{finish()}}}
+                }
             }
         }
     }
@@ -1025,6 +1246,12 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard cookieStore === store.httpCookieStore,cookieRestoreComplete,!loggingOut,!hasLogoutMarker() else{return}
         persistCookies()
     }
+    func saveSessionSnapshotIfCurrent(_ data:Data,epoch:String?)throws->Bool{
+        try withSessionStateLock(in:root){
+            guard let epoch,try sessionEpoch(in:root)==epoch,!hasLogoutMarker() else{return false}
+            try sessionVault.save(data);return true
+        }
+    }
     func persistCookies(_ done:(()->Void)?=nil){
         #if NATIVE_CONTRACT_TESTS
         if testSkipCookiePersistence{done?();return}
@@ -1036,8 +1263,8 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         store.httpCookieStore.getAllCookies{cookies in
             guard !self.loggingOut,generation==self.accountGeneration,let data=try? encodedCookies(cookies),!cookies.isEmpty else{done?();return}
             self.storageQueue.async{
-                guard !self.loggingOut,generation==self.accountGeneration,!self.hasLogoutMarker() else{DispatchQueue.main.async{done?()};return}
-                if self.latestCookieSnapshot != data{do{try self.sessionVault.save(data);self.latestCookieSnapshot=data}catch{self.diagnostic("Session snapshot save failed")}}
+                let epoch=self.processSessionEpoch
+                do{if !self.loggingOut,generation==self.accountGeneration,self.latestCookieSnapshot != data,try self.saveSessionSnapshotIfCurrent(data,epoch:epoch){self.latestCookieSnapshot=data}}catch{self.diagnostic("Session snapshot save failed")}
                 DispatchQueue.main.async{done?()}
             }
         }
@@ -1074,20 +1301,44 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         guard sessionGeneration==generation,!sessionCallbacks.isEmpty else{return};sessionDeadline?.cancel();sessionDeadline=nil;sessionWeb?.stopLoading();sessionWeb?.navigationDelegate=nil;sessionWeb?.uiDelegate=nil;sessionWeb=nil
         let callbacks=sessionCallbacks;sessionCallbacks.removeAll();sessionNeedsResume = !ready
         let notify={callbacks.forEach{$0(ready && !self.loggingOut)}}
-        if ready{try? fm.removeItem(at:automaticLoginAttentionURL);persistCookies{notify()}}else{notify()}
+        if ready{persistCookies{notify()}}else{notify()}
     }
     private var automaticLoginAttentionURL:URL{root.appendingPathComponent("automatic-login-needs-attention")}
-    func saveOfficialLogin(_ credentials:OfficialLoginCredentials)throws{
+    private var officialLoginDisabledURL:URL{root.appendingPathComponent("official-login-disabled")}
+    private var officialLoginSuppressed=false
+    func markOfficialLoginDisabled()throws{
+        officialLoginSuppressed=true
+        try fm.createDirectory(at:root,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700])
+        try Data("1".utf8).write(to:officialLoginDisabledURL,options:.atomic)
+    }
+    func disableOfficialLogin()throws{
+        try markOfficialLoginDisabled()
+        var failure:OSStatus?;_ = sessionKeychain(officialLoginCredential,remove:true,onError:{failure=$0})
+        if let failure{throw appError("已停用自动登录，但未能删除旧校园密码，请重试",code:Int(failure))}
+    }
+    func saveOfficialLogin(_ credentials:OfficialLoginCredentials,expectedEpoch:String?=nil)throws{
         guard credentials.valid else{throw appError("请填写有效的校园账号和密码")}
-        let data=try JSONEncoder().encode(credentials);var failure:OSStatus?
-        guard sessionKeychain(officialLoginCredential,data,onError:{failure=$0}) != nil else{throw appError("未能保存到系统钥匙串，请在稍后主动重试",code:Int(failure ?? errSecIO))}
-        try? fm.removeItem(at:automaticLoginAttentionURL);try removeLogoutMarker(in:root);loggingOut=false;automaticLoginAttempted=false;sessionLastAttempt = .distantPast
+        let expected=expectedEpoch ?? processSessionEpoch
+        try withSessionStateLock(in:root){
+            guard let expected,try sessionEpoch(in:root)==expected,!hasLogoutMarker() else{throw appError("登录状态已更改，请重新登录后保存校园密码")}
+            let data=try JSONEncoder().encode(credentials);var failure:OSStatus?
+            guard sessionKeychain(officialLoginCredential,data,onError:{failure=$0}) != nil else{throw appError("未能保存校园密码，请在稍后主动重试",code:Int(failure ?? errSecIO))}
+            if fm.fileExists(atPath:officialLoginDisabledURL.path){try fm.removeItem(at:officialLoginDisabledURL)}
+            officialLoginSuppressed=false;try? fm.removeItem(at:automaticLoginAttentionURL);automaticLoginAttempted=false;sessionLastAttempt = .distantPast
+        }
+    }
+    func showCredentialFailure(_ error:Error){
+        DispatchQueue.main.async{let alert=NSAlert();alert.messageText="校园登录设置未完成";alert.informativeText=userError(error);alert.runModal()}
     }
     @objc func forgetOfficialLogin(){
-        storageQueue.async{_ = self.sessionKeychain(officialLoginCredential,remove:true);try? self.fm.removeItem(at:self.automaticLoginAttentionURL)}
+        storageQueue.async{do{try self.disableOfficialLogin();try? self.fm.removeItem(at:self.automaticLoginAttentionURL)}catch{self.showCredentialFailure(error)}}
     }
     @objc func configureOfficialLoginMenu(){configureOfficialLogin{_ in}}
     func configureOfficialLogin(done:@escaping(Bool)->Void){
+        guard automaticPasswordSubmissionEnabled else{
+            let alert=NSAlert();alert.messageText="校园自动登录暂未启用";alert.informativeText="此版本不会自动填写或提交校园密码。请通过浙江大学官方认证页面手动登录；可在菜单中删除以前保存的校园登录。";alert.runModal();done(false);return
+        }
+        let requestEpoch=processSessionEpoch
         // This native password sheet appears only from the explicit menu/setup action.
         let alert=NSAlert();alert.messageText="记住校园登录";alert.informativeText="账号密码只保存在本机系统钥匙串，过期时仅填写到浙江大学官方认证页面。启动应用不弹出钥匙串权限框；验证码或二次验证仍需手动完成。";alert.addButton(withTitle:"保存");alert.addButton(withTitle:"取消")
         let panel=NSView(frame:NSRect(x:0,y:0,width:390,height:112))
@@ -1099,28 +1350,55 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let saveBoth=both.state == .on
         let credentials=OfficialLoginCredentials(username:username.stringValue.trimmingCharacters(in:.whitespacesAndNewlines),password:password.stringValue);username.stringValue="";password.stringValue=""
         storageQueue.async{
-            do{try self.saveOfficialLogin(credentials)}catch{DispatchQueue.main.async{let message=NSAlert();message.messageText="未保存校园登录";message.informativeText=userError(error);message.runModal();done(false)};return}
+            do{guard let requestEpoch else{throw appError("登录状态不可用")};try self.saveOfficialLogin(credentials,expectedEpoch:requestEpoch)}catch{DispatchQueue.main.async{let message=NSAlert();message.messageText="未保存校园登录";message.informativeText=userError(error);message.runModal();done(false)};return}
             if saveBoth{self.configureOtherOfficialLogin(credentials)}
             DispatchQueue.main.async{self.restoreCookies{self.resumeOfficialSession(force:true){ready in self.event("login",["ready":ready]);print("SESSION_SETUP authenticated="+String(ready));fflush(stdout);done(true)}}}
         }
     }
     private func configureOtherOfficialLogin(_ credentials:OfficialLoginCredentials){
-        let other=Bundle.main.bundleIdentifier=="cn.suike.gaos.mac" ? "智云助手":"智云高手",expected=other=="智云助手" ? "cn.suike.slides.mac":"cn.suike.gaos.mac",url=URL(fileURLWithPath:"/Applications/"+other+".app")
-        guard Bundle(url:url)?.bundleIdentifier==expected,let data=try? JSONEncoder().encode(credentials) else{return}
+        let other=Bundle.main.bundleIdentifier=="cn.suike.gaos.mac" ? "智云助手":"智云高手",expected:Set<String>=other=="智云助手" ? ["cn.suike.slides.mac","cn.suike.slides.mac.showcase"]:["cn.suike.gaos.mac"],url=URL(fileURLWithPath:"/Applications/"+other+".app")
+        guard let installed=Bundle(url:url)?.bundleIdentifier,expected.contains(installed),let data=try? JSONEncoder().encode(credentials) else{return}
         let task=Process(),input=Pipe(),output=Pipe();task.executableURL=url.appendingPathComponent("Contents/MacOS/Zhiyun");task.arguments=["--save-campus-login-stdin"];task.standardInput=input;task.standardOutput=output;task.standardError=FileHandle.nullDevice
         do{try task.run();try input.fileHandleForWriting.write(contentsOf:data);try input.fileHandleForWriting.close();let result=output.fileHandleForReading.readDataToEndOfFile();task.waitUntilExit();print("SESSION_SETUP otherSaved="+String(task.terminationStatus==0)+" otherAuthenticated="+String(String(data:result,encoding:.utf8)?.contains("authenticated=true")==true));fflush(stdout)}catch{print("SESSION_SETUP otherSaved=false");fflush(stdout)}
     }
+    // The marker counts unconfirmed silent attempts (network failures may retry on a later
+    // launch, up to three) and becomes "rejected" once the school says the password is wrong,
+    // so a changed password never triggers repeated failed logins or an account lock.
+    private func automaticLoginFailures()->Int?{
+        guard let text=(try? String(contentsOf:automaticLoginAttentionURL,encoding:.utf8))?.trimmingCharacters(in:.whitespacesAndNewlines) else{return 0}
+        return text=="rejected" ? nil:(Int(text.split(separator:":").first ?? "") ?? 3)
+    }
+    private func automaticLoginAllowed()->Bool{guard !officialLoginSuppressed,!fm.fileExists(atPath:officialLoginDisabledURL.path),let failures=automaticLoginFailures() else{return false};return failures<3}
+    func reserveAutomaticLoginAttempt(now:Date=Date())throws->Bool{
+        let expected=processSessionEpoch
+        return try withSessionStateLock(in:root){
+            guard let expected,try sessionEpoch(in:root)==expected,!hasLogoutMarker(),automaticLoginAllowed() else{return false}
+            let parts=((try? String(contentsOf:automaticLoginAttentionURL,encoding:.utf8)) ?? "").split(separator:":")
+            if parts.count==2,let last=Double(parts[1]),now.timeIntervalSince1970-last<30{return false}
+            let count=automaticLoginFailures() ?? 3;guard count<3 else{return false}
+            try Data("\(count+1):\(now.timeIntervalSince1970)".utf8).write(to:automaticLoginAttentionURL,options:.atomic);return true
+        }
+    }
+    private func inspectRejectedOfficialLogin(_ view:WKWebView,generation:UUID){
+        view.evaluateJavaScript("(document.querySelector('#errormsg')?.textContent||'').trim()"){value,_ in
+            guard self.sessionWeb === view,self.sessionGeneration==generation else{return}
+            if let text=value as? String,!text.isEmpty{try? Data("rejected".utf8).write(to:self.automaticLoginAttentionURL,options:.atomic);self.diagnostic("Remembered campus login was rejected")}
+            self.finishSession(false,generation:generation)
+        }
+    }
     private func attemptRememberedOfficialLogin(_ view:WKWebView,generation:UUID){
-        guard sessionWeb === view,sessionGeneration==generation,officialLoginPage(view.url),!automaticLoginAttempted,!fm.fileExists(atPath:automaticLoginAttentionURL.path),!hasLogoutMarker() else{finishSession(false,generation:generation);return}
+        guard automaticPasswordSubmissionEnabled else{finishSession(false,generation:generation);return}
+        if sessionWeb === view,sessionGeneration==generation,automaticLoginAttempted,officialLoginPage(view.url){inspectRejectedOfficialLogin(view,generation:generation);return}
+        guard sessionWeb === view,sessionGeneration==generation,officialLoginPage(view.url),!automaticLoginAttempted,automaticLoginAllowed(),!hasLogoutMarker() else{finishSession(false,generation:generation);return}
         automaticLoginAttempted=true
         storageQueue.async{
             let credentials=self.sessionKeychain(officialLoginCredential).flatMap{try? JSONDecoder().decode(OfficialLoginCredentials.self,from:$0)}
             DispatchQueue.main.async{
                 guard self.sessionWeb === view,self.sessionGeneration==generation,!self.loggingOut,officialLoginPage(view.url) else{return}
-                guard let credentials,credentials.valid else{self.finishSession(false,generation:generation);return}
+                guard self.automaticLoginAllowed(),!self.hasLogoutMarker(),let credentials,credentials.valid else{self.finishSession(false,generation:generation);return}
                 // A failed attempt is never looped at each launch. A successful
                 // official handshake clears this non-secret attention marker.
-                do{try Data("1".utf8).write(to:self.automaticLoginAttentionURL,options:.atomic)}catch{self.finishSession(false,generation:generation);return}
+                guard (try? self.reserveAutomaticLoginAttempt())==true else{self.finishSession(false,generation:generation);return}
                 view.callAsyncJavaScript(officialLoginJavaScript,arguments:["username":credentials.username,"password":credentials.password],in:nil,in:.page){result in
                     guard self.sessionWeb === view,self.sessionGeneration==generation else{return}
                     if case .success(let value)=result,["submitted","already-submitted"].contains(value as? String ?? ""){return}
@@ -1242,20 +1520,36 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         case "setAppearanceTheme":
             guard let theme=p["theme"] as? String,themeIdentifiers.contains(theme) else{reply(id,nil,"主题无效");return};applyTheme(theme);reply(id,theme)
         case "login":
-            loggingOut=false;credentialUIAllowed=false;loginCompletionPending=false;loginVisitedAuthentication=false
             if let login=login { login.makeKeyAndOrderFront(nil); reply(id,true); return }
-            let config=WKWebViewConfiguration(); config.websiteDataStore=store
-            let view=WKWebView(frame:.zero,configuration:config); view.navigationDelegate=self;view.uiDelegate=self; loginWeb=view
-            let w=NSWindow(contentRect:NSRect(x:0,y:0,width:980,height:730),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false); w.isReleasedWhenClosed=false; w.title="登录智云课堂 · 浙江大学官方认证"; w.contentView=view; w.delegate=self; w.center(); w.makeKeyAndOrderFront(nil); login=w
-            view.load(URLRequest(url:URL(string:"https://classroom.zju.edu.cn/")!)); reply(id,true)
+            do{try storageQueue.sync{try withSessionStateLock(in:self.root){
+                try writeLogoutMarkerLocked(in:self.root);try self.disableOfficialLogin();try self.clearLoggedOutSessionBeforeSignIn()
+                self.processSessionEpoch=try sessionEpoch(in:self.root);self.explicitLoginEpoch=self.processSessionEpoch
+            }}}catch{reply(id,nil,"无法安全清除之前的校园登录，请先重试删除");return}
+            loggingOut=false;credentialUIAllowed=false;loginCompletionPending=false;loginVisitedAuthentication=false
+            let epoch=processSessionEpoch
+            store.httpCookieStore.getAllCookies{cookies in
+                let group=DispatchGroup()
+                for cookie in cookies where trustedCookieDomain(cookie.domain){group.enter();self.store.httpCookieStore.delete(cookie){group.leave()}}
+                group.notify(queue:.main){
+                    guard let epoch,(try? withSessionStateLock(in:self.root){try sessionEpoch(in:self.root)==epoch && self.hasLogoutMarker()}) == true,!self.loggingOut else{self.reply(id,nil,"登录状态已更改，请重新登录");return}
+                    // Submitted form data cannot be bound reliably to successful identity.
+                    let config=WKWebViewConfiguration();config.websiteDataStore=self.store
+                    let view=WKWebView(frame:.zero,configuration:config);view.navigationDelegate=self;view.uiDelegate=self;self.loginWeb=view
+                    let w=NSWindow(contentRect:NSRect(x:0,y:0,width:980,height:730),styleMask:[.titled,.closable,.resizable],backing:.buffered,defer:false);w.isReleasedWhenClosed=false;w.title="登录智云课堂 · 浙江大学官方认证";w.contentView=view;w.delegate=self;w.center();w.makeKeyAndOrderFront(nil);self.login=w
+                    view.load(URLRequest(url:URL(string:"https://classroom.zju.edu.cn/")!));self.reply(id,true)
+                }
+            }
         case "loginDone": login?.orderOut(nil);sessionNeedsResume=false;sessionLastAttempt = .distantPast;persistCookies{self.credentialUIAllowed=false;self.login?.close();self.reply(id,true)}
         case "logout":
             // Persist the explicit intent first. Even a refused Keychain deletion must
             // not resurrect the prior account or cookies on the next launch.
-            storageQueue.async{do{try writeLogoutMarker(in:self.root);DispatchQueue.main.async{self.performLogout(id)}}catch{self.reply(id,nil,"无法保存退出状态，请重试")}}
+            storageQueue.async{do{
+                let epoch=try withSessionStateLock(in:self.root){try writeLogoutMarkerLocked(in:self.root);try self.markOfficialLoginDisabled();return try sessionEpoch(in:self.root)}
+                DispatchQueue.main.async{self.performLogout(id,epoch:epoch)}
+            }catch{self.reply(id,nil,"无法保存退出状态，请重试")}}
         case "identity":
-            let allowUI=credentialUIAllowed
-            storageQueue.async{if let text=p["text"] as? String{do{try self.saveIdentity(text,allowUI:allowUI);self.reply(id,true)}catch{self.reply(id,nil,userError(error))}}else{self.reply(id,self.storedIdentity())}}
+            let allowUI=credentialUIAllowed,epoch=processSessionEpoch,loginEpoch=explicitLoginEpoch
+            storageQueue.async{if let text=p["text"] as? String{do{guard let epoch else{throw appError("登录状态不可用")};try self.saveIdentity(text,allowUI:allowUI,expectedEpoch:epoch,loginEpoch:loginEpoch);self.reply(id,true)}catch{self.reply(id,nil,userError(error))}}else{self.reply(id,self.storedIdentity())}}
         case "account": let next=digest(p["id"] as? String ?? "guest");if next != account{accountGeneration=UUID();clearPreparedImages()};account=next;reply(id,true)
         case "read":
             guard let key=p["key"] as? String,safeKey(key) else{reply(id,nil,"文件名无效");return}
@@ -1436,6 +1730,11 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
     }
     func startAI(_ id:String,_ params:[String:Any]){
         guard let messages=params["messages"] as? [[String:Any]],messages.count<(params["purpose"] as? String=="agent" ? 300:100) else{reply(id,nil,"问答内容无效");return}
+        if let supplied=params["tools"] {
+            guard let tools=supplied as? [[String:Any]],tools.count<=128,tools.allSatisfy({tool in
+                guard tool["type"] as? String=="function",let function=tool["function"] as? [String:Any],let name=function["name"] as? String,!name.isEmpty,function["parameters"] is [String:Any] else{return false};return true
+            }) else{reply(id,nil,"AI工具配置无效，请更新应用后重试");return}
+        }
         let provider=params["provider"] as? String ?? "auto"
         guard ["auto","personal","local"].contains(provider) else{reply(id,nil,"AI来源无效");return}
         let owner=account,generation=accountGeneration;pendingAI.insert(id)
@@ -1470,7 +1769,7 @@ final class App: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavi
         let effort=params["reasoning_effort"] as? String ?? "high"
         guard ["low","high","max"].contains(effort) else{reply(id,nil,"思考强度无效");return}
         var body:[String:Any]=["model":model,"messages":messages,"stream":true,"max_tokens":agent ? 16384:4096,"stream_options":["include_usage":true]]
-        body["thinking"]=["type":agent ? "enabled":"disabled"];if agent{body["reasoning_effort"]=effort};if let tools=params["tools"] as? [[String:Any]],tools.count<=4 {body["tools"]=tools};req.httpBody=try? JSONSerialization.data(withJSONObject:body)
+        body["thinking"]=["type":agent ? "enabled":"disabled"];if agent{body["reasoning_effort"]=effort};if let tools=params["tools"] as? [[String:Any]],!tools.isEmpty {body["tools"]=tools;body["tool_choice"]="auto"};req.httpBody=try? JSONSerialization.data(withJSONObject:body)
         #if NATIVE_CONTRACT_TESTS
         if let probe=testAIRequest{probe(req);reply(id,["answer":"synthetic","calls":[]]);return}
         #endif
@@ -1689,6 +1988,7 @@ if CommandLine.arguments.contains("--configure-campus-login"){
     application.setActivationPolicy(.prohibited)
     DispatchQueue.main.async{delegate.observeSessionCookies();delegate.prepareAutomaticLoginAfterRestart{delegate.restoreCookies{delegate.resumeOfficialSession(force:true){ready in print("SESSION_CHECK authenticated="+String(ready));fflush(stdout);exit(ready ? 0:2)}}}}
 }else if CommandLine.arguments.contains("--save-campus-login-stdin"){
+    guard automaticPasswordSubmissionEnabled else{exit(2)}
     application.setActivationPolicy(.prohibited)
     let data=FileHandle.standardInput.readDataToEndOfFile()
     guard data.count<=8192,let credentials=try? JSONDecoder().decode(OfficialLoginCredentials.self,from:data) else{exit(1)}

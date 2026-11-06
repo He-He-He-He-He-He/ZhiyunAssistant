@@ -8,6 +8,10 @@ import { PermissionRecord, PermissionStorage, PermissionValue } from '../model/P
 import { Account, Course, Slide, Transcript, imageUrl, plain, shanghaiDate } from '../model/Timeline';
 
 export class AccessDenied extends Error {}
+export class AuthenticationExpired extends Error {
+  readonly classroom: boolean;
+  constructor(classroom: boolean) { super('登录失效，请重新登录'); this.classroom = classroom; }
+}
 const ORIGIN = 'https://classroom.zju.edu.cn';
 const INTERACTIVE = 'https://interactivemeta.cmc.zju.edu.cn';
 interface UserRaw { id?: string | number; name?: string; realname?: string; account?: string; tenant_id?: number }
@@ -160,7 +164,7 @@ export class Zhiyun {
             const value = data.code === 200 ? data.data?.[c.subId] : undefined;
             if (value) { states[c.subId] = permissionForCourse(c, value, now); if (states[c.subId] !== 'unknown') confirmed.push(c.subId); }
           });
-        } catch (_) { failures++; }
+        } catch (error) { if (error instanceof AuthenticationExpired) throw error; failures++; }
         if (gen !== this.stopped) return;
         progress(states, confirmed.slice());
       }
@@ -168,15 +172,16 @@ export class Zhiyun {
     await Promise.all([worker(), worker()]);
     return states;
   }
-  private async request(path: string, post: string = '', origin: string = ORIGIN): Promise<string> {
+  private async request(path: string, post: string = '', origin: string = ORIGIN, isolatedCookie?: string): Promise<string> {
+    if (isolatedCookie !== undefined && (origin !== ORIGIN || !isolatedCookie.trim() || /[\r\n]/.test(isolatedCookie))) throw new Error('隔离会话无效');
     const gen = this.stopped;
-    const req = http.createHttp();
-    this.pending.add(req);
-    const cookie = SessionStore.cookie(ORIGIN);
+    const cookie = isolatedCookie !== undefined ? isolatedCookie : SessionStore.cookie(ORIGIN);
     const raw = decodeURIComponent((/(?:^|;\s*)_token=([^;]*)/.exec(cookie) || [])[1] || '');
     const token = (/{i:\d+;s:\d+:"_token";i:\d+;s:\d+:"(.+?)";}/.exec(raw) || [])[1] || '';
     const headers: Record<string, string> = { 'Cookie': origin === ORIGIN ? cookie : SessionStore.cookie(origin), 'Accept': 'application/json', 'Referer': ORIGIN + '/', 'Content-Type': 'application/json' };
     if (token) headers['Authorization'] = 'Bearer ' + token;
+    const req = http.createHttp();
+    this.pending.add(req);
     try {
       const response = await req.request(origin + path, {
         method: post ? http.RequestMethod.POST : http.RequestMethod.GET,
@@ -186,9 +191,9 @@ export class Zhiyun {
       if (gen !== this.stopped) throw new Error('已取消');
       if (response.responseCode === 403) throw new AccessDenied('当前账号没有这节课的访问权限');
       if (response.responseCode === 401) {
-        // A room-specific or interactive-ASR credential may fail while the main account is still valid.
-        if (origin === ORIGIN && path === '/userapi/v1/infosimple') await SessionStore.clear();
-        throw new Error('登录失效，请重新登录');
+        // An expired session must not erase the saved identity or offline library.
+        // Explicit logout owns credential deletion; isolated probes never mutate it either.
+        throw new AuthenticationExpired(origin === ORIGIN && isolatedCookie === undefined);
       }
       if (response.responseCode !== 200) throw new Error(`智云暂时无法访问（${response.responseCode}）`);
       const result = response.result as string;
@@ -200,6 +205,15 @@ export class Zhiyun {
     const data = JSON.parse(await this.request('/userapi/v1/infosimple')) as UserResponse;
     if (!data.params?.id) throw new Error('请先登录浙江大学统一身份认证');
     return { id: String(data.params.id), name: data.params.realname || data.params.name || '同学', tenantId: data.params.tenant_id || 112, username: data.params.account || '' };
+  }
+  // Query the isolated Web cookie directly; do not adopt it or clear the active session.
+  // Unlike the normal account view, identity verification must not infer a missing tenant.
+  async accountForIsolatedCookie(cookie: string): Promise<Account> {
+    const data = JSON.parse(await this.request('/userapi/v1/infosimple', '', ORIGIN, cookie)) as UserResponse;
+    const user = data.params;
+    const id = user?.id;
+    if (!user || (typeof id !== 'string' && typeof id !== 'number') || (typeof id === 'number' && (!Number.isSafeInteger(id) || id <= 0)) || (typeof id === 'string' && (!id || id !== id.trim() || id.length > 256)) || !Number.isSafeInteger(user.tenant_id) || user.tenant_id! <= 0) throw new Error('无法确认隔离会话身份');
+    return { id: String(id), name: user.realname || user.name || '同学', tenantId: user.tenant_id!, username: user.account || '' };
   }
   async plaza(account: Account, date: string, live: boolean): Promise<Course[]> {
     const path = `/courseapi/v2/course-live/search-live-course-list?need_time_quantum=1&unique_course=1&with_sub_duration=1&with_sub_data=1&tenant=${account.tenantId}&search_time=${encodeURIComponent(date)}&sub_live_status=${live ? '1' : ''}&sub_public=&course_student_type=`;
@@ -247,7 +261,7 @@ export class Zhiyun {
         const metadata = JSON.parse(await this.request('/courseapi/v2/course-live/search-live-course-list?all=1&course_id=' + encodeURIComponent(hit.courseId) + '&with_sub_data=1&show_all=1')) as PlazaResponse;
         const apply = (rows: PlazaRaw[]): void => rows.forEach((row: PlazaRaw) => { if (row.list?.length) apply(row.list); else { const item = result.find((course: Course) => course.subId === String(row.sub_id || row.id)); if (!item) return; const end = this.epochSeconds(row.course_over || row.end_at); if (end > item.start) item.end = end; if (row.sub_status !== undefined || row.status !== undefined) item.status = String(row.sub_status ?? row.status); } });
         if (metadata.code === 0) apply(metadata.list || []);
-      } catch (err) { if (err instanceof AccessDenied) throw err; }
+      } catch (err) { if (err instanceof AccessDenied || err instanceof AuthenticationExpired) throw (err as Error); }
     }
     let cursor = 0;
     const hydrate = async (): Promise<void> => { while (cursor < result.length && gen === this.stopped) { const item = result[cursor++]; if (item.end > item.start) continue; try { const info = await this.info(item); if (gen !== this.stopped) return; item.start = this.epochSeconds(info.start_at) || item.start; item.end = this.epochSeconds(info.end_at); if (info.sub_status !== undefined) item.status = String(info.sub_status); } catch (_) {} } };
@@ -416,13 +430,13 @@ export class Zhiyun {
     let primary: Slide[] = [];
     let primaryError: Error | undefined = undefined;
     try { primary = await this.slidesFrom(course, ORIGIN); }
-    catch (err) { if (err instanceof AccessDenied) throw err; primaryError = err as Error; }
+    catch (err) { if (err instanceof AccessDenied || err instanceof AuthenticationExpired) throw (err as Error); primaryError = err as Error; }
     if (primary.length) { this.slideOrigins.set(course.subId, ORIGIN); return primary; }
     try {
       const secondary = await this.slidesFrom(course, INTERACTIVE);
       if (secondary.length) this.slideOrigins.set(course.subId, INTERACTIVE);
       return secondary;
-    } catch (err) { if (err instanceof AccessDenied) throw err; if (primaryError) throw primaryError; return primary; }
+    } catch (err) { if (err instanceof AccessDenied || err instanceof AuthenticationExpired) throw (err as Error); if (primaryError) throw primaryError; return primary; }
   }
   private async slidesFrom(course: Course, origin: string): Promise<Slide[]> {
     const all: Slide[] = [];
@@ -463,11 +477,11 @@ export class Zhiyun {
     if (known) return this.transcriptsFrom(course, known);
     const origin = this.slideOrigins.get(course.subId) === INTERACTIVE ? INTERACTIVE : ORIGIN;
     let primary: Transcript[] = [], failure: Error | undefined = undefined;
-    try { primary = await this.transcriptsFrom(course, origin); } catch (err) { if (err instanceof AccessDenied) throw err; failure = err as Error; }
+    try { primary = await this.transcriptsFrom(course, origin); } catch (err) { if (err instanceof AccessDenied || err instanceof AuthenticationExpired) throw (err as Error); failure = err as Error; }
     if (primary.length) { this.transcriptOrigins.set(course.subId, origin); return primary; }
     const alternate = origin === INTERACTIVE ? ORIGIN : INTERACTIVE;
     try { const rows = await this.transcriptsFrom(course, alternate); if (rows.length) this.transcriptOrigins.set(course.subId, alternate); return rows; }
-    catch (err) { if (err instanceof AccessDenied) throw err; if (failure) throw failure; return primary; }
+    catch (err) { if (err instanceof AccessDenied || err instanceof AuthenticationExpired) throw (err as Error); if (failure) throw failure; return primary; }
   }
   private async transcriptsFrom(course: Course, origin: string): Promise<Transcript[]> {
     const data = JSON.parse(await this.request(`/courseapi/v3/web-socket/search-trans-result?sub_id=${encodeURIComponent(course.subId)}&format=json`, '', origin)) as AsrResponse;

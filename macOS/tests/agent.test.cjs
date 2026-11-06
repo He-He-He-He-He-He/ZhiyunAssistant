@@ -174,3 +174,34 @@ test('runtime reports each model round and the validated arguments and output of
  assert.equal(events.filter(e=>e.type==='turn').length,2);assert.deepEqual(events.find(e=>e.type==='step').args,{n:2});assert.deepEqual(events.find(e=>e.type==='result').output,{n:2});
  }finally{r.win.close()}
 });
+
+test('raw DSML is retried as a structured call with all five tools, never executed as text',async()=>{
+ const {r,AppActions,AgentRunner}=await load();try{let writes=0,requests=0;const events=[];
+ const raw='<｜DSML｜calls><｜DSML｜invoke name="app_do"><｜DSML｜parameter name="name" string="true">write</｜DSML｜parameter></｜DSML｜invoke></｜DSML｜calls>';
+ const registry=new AppActions().register('write','Write',{},[],()=>{writes++;return {ok:true}});
+ const runner=new AgentRunner({registry,state:()=>({}),inspect:()=>({}),knowledge:()=>({}),emit:e=>events.push(e),stream:async(messages,delta,tools)=>{
+  assert.equal(tools.length,5);assert.ok(!JSON.stringify(messages).includes('<｜DSML｜'));
+  if(requests++===0){delta(raw.slice(0,10));delta(raw.slice(10));return {answer:raw,calls:[]}};
+  if(requests===2){assert.equal(writes,0);return {calls:[call('write')]}};
+  return {answer:'已完成'};
+ }});
+ assert.equal(await runner.run('写入',[{role:'assistant',content:raw}]),'已完成');assert.equal(writes,1);assert.equal(requests,3);
+ assert.equal(events.filter(e=>e.type==='done').length,1);assert.ok(events.some(e=>e.type==='retry'&&e.protocol));
+ }finally{r.win.close()}
+});
+test('repeated or truncated protocol prose cannot report success or perform an action',async()=>{
+ const {r,AppActions,AgentRunner}=await load();try{for(const truncated of [false,true]){let writes=0,requests=0;const events=[];
+ const runner=new AgentRunner({registry:new AppActions().register('write','Write',{},[],()=>writes++),state:()=>({}),inspect:()=>({}),emit:e=>events.push(e),stream:async()=>{requests++;return {answer:'<|DSML|tool_calls><|DSML|invoke name="write">',finish_reason:truncated?'length':'stop'}}});
+ await assert.rejects(runner.run('写入'),truncated?/达到上限/:/尚未执行/);assert.equal(writes,0);assert.equal(events.some(e=>e.type==='done'),false);assert.equal(requests,truncated?1:2);
+ }}finally{r.win.close()}
+});
+test('old malformed assistant replies render a failure notice while preserving the user conversation',async t=>{
+ const {assistant}=await fixture(t);await assistant.show();assistant.history=[{role:'user',content:'改为深色'},{role:'assistant',content:'<｜DSML｜calls><｜DSML｜invoke name="app_do">'}];assistant.renderHistory();
+ assert.match(assistant.log.textContent,/这次操作未执行成功/);assert.match(assistant.log.textContent,/改为深色/);assert.ok(!assistant.log.textContent.includes('DSML'));
+});
+
+test('assistant offers explicit saved-key recovery without prompting when settings open',async t=>{
+ const{r,assistant,doc}=await fixture(t);await assistant.show();let prompts=0;
+ assistant.options.ready=async()=>false;assistant.options.providerStatus=()=>({personalReady:false});assistant.options.recoverKey=async()=>{prompts++};
+ await assistant.settings();assert.equal(prompts,0);const recover=[...doc.querySelectorAll('button')].find(b=>b.textContent==='恢复 AI 连接');assert.ok(recover);recover.click();await new Promise(resolve=>setTimeout(resolve,20));assert.equal(prompts,1);assert.equal(assistant.root.dataset.view,'chat');
+});

@@ -189,7 +189,7 @@ export namespace asset {
   function filename(query: AssetMap): string { const alias = Buffer.from(query.get(Tag.ALIAS) || '').toString('utf8'); if (!/^zhiyun-[a-zA-Z0-9-]+$/.test(alias)) throw new Error('密钥标识无效'); return path.join(storageRoot(), 'secrets', alias + '.bin'); }
   export async function query(query: AssetMap): Promise<AssetMap[]> { try { const value = secureStorage().decryptString(fsNode.readFileSync(filename(query))); return [new Map([[Tag.SECRET, new globalThis.TextEncoder().encode(value)]])]; } catch (_) { return []; } }
   export async function add(value: AssetMap): Promise<void> { if (!secureStorage().isEncryptionAvailable()) throw new Error('系统安全存储不可用，无法保存 API 密钥'); const file = filename(value); fsNode.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 }); const bytes = secureStorage().encryptString(Buffer.from(value.get(Tag.SECRET)).toString('utf8')); fsNode.writeFileSync(file + '.tmp', bytes, { mode: 0o600 }); fsNode.renameSync(file + '.tmp', file); }
-  export async function remove(query: AssetMap): Promise<void> { fsNode.rmSync(filename(query), { force: true }); }
+  export async function remove(query: AssetMap): Promise<void> { const file = filename(query); let failure: unknown; for (const target of [file, file + '.tmp']) { try { fsNode.rmSync(target, { force: true }); } catch (error) { failure ||= error; } } if (failure) throw failure; }
 }
 
 export namespace webSocket {

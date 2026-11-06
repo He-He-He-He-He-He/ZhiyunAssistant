@@ -33,6 +33,11 @@ import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.Toast;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+import android.widget.EditText;
+import android.widget.CheckBox;
+import android.text.InputType;
 import androidx.activity.ComponentActivity;
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
@@ -68,13 +73,15 @@ public final class MainActivity extends ComponentActivity implements NativeIO.Ho
     private WindowLayoutInfo layout;
     private final Consumer<WindowLayoutInfo> layoutListener = info -> { layout = info; emitViewport(); };
     private ActivityResultLauncher<Intent> loginLauncher, imageLauncher, cameraLauncher, exportLauncher;
-    private CompletableFuture<Void> loginPending;
+    private CompletableFuture<JSONObject> loginPending;
     private CompletableFuture<String> imagePending, exportPending;
     private Uri cameraUri;
     private File cameraFile;
     private String exportPath;
     private OrientationEventListener rotation;
     private boolean landscapeObserved;
+    private CompletableFuture<Boolean> nativeSettingsPending;
+    private AlertDialog nativeSettingsDialog;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -83,8 +90,8 @@ public final class MainActivity extends ComponentActivity implements NativeIO.Ho
         else getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         loginLauncher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
-            if (loginPending != null) { CompletableFuture<Void> value = loginPending; loginPending = null;
-                if (result.getResultCode() == RESULT_OK) value.complete(null); else value.completeExceptionally(new IOException("已取消登录")); }
+            if (loginPending != null) { CompletableFuture<JSONObject> value = loginPending; loginPending = null;
+                if (result.getResultCode() == RESULT_OK) value.complete(new JSONObject()); else value.completeExceptionally(new IOException("已取消登录")); }
         });
         imageLauncher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
             if (imagePending == null) return;
@@ -287,8 +294,14 @@ public final class MainActivity extends ComponentActivity implements NativeIO.Ho
         event("app.viewport",info);
     }
     @Override public void onConfigurationChanged(Configuration config) { super.onConfigurationChanged(config); if (web != null) web.post(this::emitViewport); }
-    @Override protected void onStart() { super.onStart(); visible = true; event("app.lifecycle",json("active",true)); if (tracker != null) tracker.addWindowLayoutInfoListener(this,ContextCompat.getMainExecutor(this),layoutListener); }
-    @Override protected void onStop() { visible = false; event("app.lifecycle",json("active",false)); if (tracker != null) tracker.removeWindowLayoutInfoListener(layoutListener); super.onStop(); }
+    @Override protected void onStart() { super.onStart(); visible = true; if(io!=null) io.nativeForeground(true); event("app.lifecycle",json("active",true)); if (tracker != null) tracker.addWindowLayoutInfoListener(this,ContextCompat.getMainExecutor(this),layoutListener); }
+    @Override protected void onStop() {
+        visible = false; event("app.lifecycle",json("active",false));
+        if(io!=null) io.nativeForeground(false);
+        if(nativeSettingsDialog!=null) nativeSettingsDialog.dismiss();
+        if(nativeSettingsPending!=null) nativeSettingsPending.complete(false);
+        if (tracker != null) tracker.removeWindowLayoutInfoListener(layoutListener); super.onStop();
+    }
     @Override protected void onResume() { super.onResume(); event("app.lifecycle",json("active",true)); if (web != null) web.onResume(); if (nativeFullscreen && rotation != null && rotation.canDetectOrientation()) rotation.enable(); }
     @Override protected void onPause() { if (rotation != null) rotation.disable(); if (web != null) CookieManager.getInstance().flush(); /* A paused activity may still be visible in Android split screen; stop refresh only in onStop. */ super.onPause(); }
     private void stopDownloadsService() { downloadsActive = false; stopService(new Intent(this,DownloadService.class)); }
@@ -303,10 +316,115 @@ public final class MainActivity extends ComponentActivity implements NativeIO.Ho
     }
     private void failPending() { IOException error = new IOException("页面已关闭"); if (loginPending != null) { loginPending.completeExceptionally(error); loginPending = null; } finishImage(null,error); if (exportPending != null) { exportPending.completeExceptionally(error); exportPending = null; exportPath = null; } }
 
-    @Override public CompletableFuture<Void> login() {
-        CompletableFuture<Void> result = new CompletableFuture<>(); runOnUiThread(() -> {
+    @Override public void cancelSilentLogin() { if(io!=null) io.cancelNativeLogin(); }
+    @Override public CompletableFuture<Boolean> viewNativeDiagnostics() {
+        if(nativeSettingsPending!=null && !nativeSettingsPending.isDone()) return nativeSettingsPending;
+        CompletableFuture<Boolean> result=new CompletableFuture<>();
+        nativeSettingsPending=result;
+        result.whenComplete((ok,error)->{ if(nativeSettingsPending==result) nativeSettingsPending=null; });
+        showNativeDiagnosticReport("上次原生诊断（只读）",result);
+        return result;
+    }
+    private void showNativeDiagnosticReport(String title,CompletableFuture<Boolean> result) {
+        if(destroying || !visible) { result.complete(false); return; }
+        android.widget.ScrollView scroll=new android.widget.ScrollView(this);
+        TextView text=new TextView(this); text.setText(io.nativeDiagnosticReport()); text.setTextIsSelectable(true);
+        int padding=(int)(16*getResources().getDisplayMetrics().density);
+        text.setPadding(padding,padding,padding,padding); scroll.addView(text);
+        nativeSettingsDialog=new AlertDialog.Builder(this).setTitle(title).setView(scroll)
+            .setPositiveButton("关闭",(d,w)->result.complete(false))
+            .setOnCancelListener(d->result.complete(false)).show();
+    }
+    @Override public CompletableFuture<Boolean> nativeAnonymousPreflight() {
+        if(nativeSettingsPending!=null && !nativeSettingsPending.isDone()) return nativeSettingsPending;
+        CompletableFuture<Boolean> result=new CompletableFuture<>();
+        if(destroying || !visible) { result.complete(false); return result; }
+        nativeSettingsPending=result;
+        nativeSettingsDialog=new AlertDialog.Builder(this).setTitle("匿名生产链预检（0 密码 POST）")
+            .setMessage("仅在你明确点击后，使用与生产登录相同的 raw TLS、HTTP/正则解析和全新私有 Cookie jar，检查发现、表单、公钥、验证码及会话连续性。仅 GET；不读取保存密码、不提交密码、不预留或恢复认证额度，不开启自动登录。预检成功也不代表认证成功。")
+            .setPositiveButton("仅运行匿名预检",(d,w)->{
+                io.anonymousNativePreflight().whenComplete((ok,error)->runOnUiThread(()->{
+                    if(result.isDone()) return;
+                    if(!visible || destroying) { result.complete(false); return; }
+                    showNativeDiagnosticReport("匿名预检安全报告",result);
+                }));
+            })
+            .setNegativeButton("取消",(d,w)->result.complete(false))
+            .setOnCancelListener(d->result.complete(false)).show();
+        result.whenComplete((ok,error)->{ if(nativeSettingsPending==result) nativeSettingsPending=null; });
+        return result;
+    }
+    /** Renderer can open this native UI, but cannot supply credentials or consent. */
+    @Override public CompletableFuture<Boolean> nativeAccountSettings() {
+        if(nativeSettingsPending!=null && !nativeSettingsPending.isDone()) return nativeSettingsPending;
+        CompletableFuture<Boolean> result=new CompletableFuture<>(); nativeSettingsPending=result;
+        io.savedNativeAccount().whenComplete((saved,error) -> runOnUiThread(() -> {
+            if(destroying || !visible || result.isDone()) { result.complete(false); return; }
+            NativeCasLogin.Identity current=io.currentNativeAccount();
+            java.util.List<String> options=new java.util.ArrayList<>();
+            if(current!=null) options.add("验证并加密保存当前账号（单次提交）");
+            if(saved!=null) options.add("启用已保存账号的一次自动重登验收");
+            if(options.isEmpty()) {
+                new AlertDialog.Builder(this).setTitle("原生账号验收").setMessage("请先完成官方手动登录并读取账号，再进入此处。原生自动登录默认关闭。")
+                    .setPositiveButton("知道了",(d,w)->result.complete(false)).setOnCancelListener(d->result.complete(false)).show(); return;
+            }
+            nativeSettingsDialog=new AlertDialog.Builder(this).setTitle("原生账号验收（启动时默认关闭）")
+                .setItems(options.toArray(new String[0]),(d,index) -> {
+                    if(current!=null && index==0) showNativeEnrollment(current,result);
+                    else showNativeEnable(saved,result);
+                }).setNegativeButton("取消",(d,w)->result.complete(false)).setOnCancelListener(d->result.complete(false)).show();
+        }));
+        result.whenComplete((ok,error) -> { if(nativeSettingsPending==result) nativeSettingsPending=null; });
+        return result;
+    }
+    private void showNativeEnable(NativeCasLogin.Identity saved,CompletableFuture<Boolean> result) {
+        nativeSettingsDialog=new AlertDialog.Builder(this).setTitle("允许一次自动重登验收？")
+            .setMessage("账号："+saved.user+"\n仅在本次启用后、应用处于前台并确实收到课堂 HTTP 401 时，使用此前保存的同意并持久预留一次；成功或失败均不恢复额度。网络错误、403、验证码不重试。此按钮本身不发送 CAS POST；已耗用的记录不会重新获得额度。")
+            .setPositiveButton("明确同意启用",(d,w)->result.complete(io.enableNativeValidation(saved)))
+            .setNegativeButton("取消",(d,w)->result.complete(false)).setOnCancelListener(d->result.complete(false)).show();
+    }
+    private void showNativeEnrollment(NativeCasLogin.Identity current,CompletableFuture<Boolean> result) {
+        LinearLayout form=new LinearLayout(this); form.setOrientation(LinearLayout.VERTICAL);
+        int padding=(int)(20*getResources().getDisplayMetrics().density); form.setPadding(padding,0,padding,0);
+        TextView description=new TextView(this);
+        description.setText("已由官方接口核验的账号："+current.user+"\n原生登录仍为待线上端到端验收的功能，启动时默认关闭。本次由你本人逐项明确同意后，会发起一个私有原生 CAS 验证。验证码或失败转官方手动登录，不自动重试。");
+        EditText password=new EditText(this); password.setSingleLine(true); password.setHint("校园密码（仅原生内存）");
+        password.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        password.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        CheckBox save=new CheckBox(this); save.setText("同意核验通过后用 AndroidKeyStore 加密保存密码；退出或切号撤销");
+        CheckBox consent=new CheckBox(this); consent.setText("明确同意现在仅一次验证提交，并允许通过后 HTTP 401 时持久预留一次自动重登");
+        form.addView(description); form.addView(password); form.addView(save); form.addView(consent);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("验证并保存账号").setView(form)
+            .setPositiveButton("同意并仅验证一次",null).setNegativeButton("取消",(d,w)->{ io.cancelNativeLogin(); result.complete(false); })
+            .setOnCancelListener(d->{ io.cancelNativeLogin(); result.complete(false); }).create();
+        nativeSettingsDialog=dialog;
+        dialog.setOnShowListener(d -> {
+            dialog.getWindow().addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+                if(!save.isChecked() || !consent.isChecked() || password.length()==0) { description.setText("请填写密码，并逐项明确同意后再验证。账号："+current.user); return; }
+                char[] secret=new char[password.length()]; password.getText().getChars(0,password.length(),secret,0); password.setText("");
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(false); password.setEnabled(false); save.setEnabled(false); consent.setEnabled(false);
+                description.setText("正在执行单次原生验证；转入后台会取消。不会自动重试。");
+                io.enrollNativeAccount(current,secret).whenComplete((ok,error) -> runOnUiThread(() -> {
+                    if(result.isDone()) { dialog.dismiss(); return; }
+                    boolean success=error==null && Boolean.TRUE.equals(ok);
+                    result.complete(success); dialog.dismiss();
+                    if(visible && !destroying) new AlertDialog.Builder(this).setTitle(success?"账号已核验并加密保存":"未完成验证")
+                        .setMessage(success?"官方会话已采用并再次核验身份；本次启用一次自动重登验收。":"未发布新会话，不自动重试。\n"+io.nativeDiagnosticReport())
+                        .setNegativeButton(success?null:"转官方手动登录",(manualDialog,which)->{ if(!success) event("app.manualLoginRequested",new JSONObject()); })
+                        .setPositiveButton("知道了",null).show();
+                }));
+            });
+        });
+        dialog.setOnDismissListener(d -> password.setText("")); dialog.show();
+    }
+    @Override public void cancelLogin() {
+        if (loginPending != null) OfficialLoginActivity.cancelPending();
+    }
+    @Override public CompletableFuture<JSONObject> login() {
+        CompletableFuture<JSONObject> result = new CompletableFuture<>(); runOnUiThread(() -> {
             if (loginPending != null) { loginPending.whenComplete((value,error) -> { if (error == null) result.complete(null); else result.completeExceptionally(error); }); return; }
-            loginPending = result; loginLauncher.launch(new Intent(this,OfficialLoginActivity.class));
+            loginPending = result; OfficialLoginActivity.prepareLogin(); loginLauncher.launch(new Intent(this,OfficialLoginActivity.class));
         }); return result;
     }
     @Override public CompletableFuture<String> pickImage() {

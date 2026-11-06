@@ -2,18 +2,43 @@ import {app,BrowserWindow,session,protocol,net,ipcMain,dialog,shell,clipboard,Cl
 import path from 'node:path';import fs from 'node:fs/promises';import {pathToFileURL} from 'node:url';
 import {ExternalAgentBroker} from './externalAgent';
 import {desktopWindowBounds} from './windowGeometry';
-import {createServices} from './services';import {UI_ORIGIN,staticPath,ipcOrigin,officialLoginURL,safeExternal,validateCall,safeName} from './security';
+import {createServices} from './services';import {SessionGate} from './sessionGate';import {UI_ORIGIN,staticPath,ipcOrigin,officialLoginURL,safeExternal,validateCall,safeName} from './security';
 protocol.registerSchemesAsPrivileged([{scheme:'zhiyun',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true}},{scheme:'zhiyun-resource',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true,stream:true}}]);
 if(process.env.ZHIYUN_TEST_DATA&&!app.isPackaged)app.setPath('userData',path.resolve(process.env.ZHIYUN_TEST_DATA));
 let win:BrowserWindow|null=null,loginWin:BrowserWindow|null=null,backend:any,closing=false,flushing=false;
+const sessionGate=new SessionGate();
 const locked=app.requestSingleInstanceLock();if(!locked)app.quit();
 app.on('second-instance',()=>{if(win){if(win.isMinimized())win.restore();win.show();win.focus();}});
 app.on('window-all-closed',()=>app.quit());
 function configureSession(s:Electron.Session){s.setPermissionRequestHandler((web,permission,callback,details)=>{if(permission==='media'&&ipcOrigin(web.getURL())&&'mediaTypes' in details&&Array.isArray(details.mediaTypes)&&details.mediaTypes.includes('video')&&!details.mediaTypes.includes('audio')){dialog.showMessageBox(win!,{type:'question',title:'使用摄像头',message:'允许智云助手使用摄像头拍摄笔记图片？',buttons:['允许','取消'],defaultId:1,cancelId:1}).then(result=>callback(result.response===0)).catch(()=>callback(false));}else callback(false);});s.setPermissionCheckHandler((_web,permission,origin)=>permission==='media'&&ipcOrigin(origin));}
 function guardWindow(w:BrowserWindow,login=false){w.webContents.setWindowOpenHandler(({url})=>{if(login&&officialLoginURL(url))void w.loadURL(url);return{action:'deny'};});w.webContents.on('will-navigate',(event,url)=>{if(login?!officialLoginURL(url):!ipcOrigin(url))event.preventDefault();});}
-async function openLogin(){if(loginWin){loginWin.focus();return null;}return new Promise<any>(resolve=>{const s=session.fromPartition('persist:zhiyun-campus');configureSession(s);const owner=win&&!win.isDestroyed()?win.getBounds():undefined;const work=owner?screen.getDisplayMatching(owner).workArea:screen.getPrimaryDisplay().workArea;const bounds=desktopWindowBounds(work,{width:1000,height:760,minWidth:520,minHeight:560},owner);loginWin=new BrowserWindow({title:'登录智云课堂',parent:win??undefined,...bounds,backgroundColor:'#f3f6fa',webPreferences:{session:s,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});const w=loginWin;guardWindow(w,true);let probing=false,lastProbe=0,completed=false;const probe=async()=>{if(probing||Date.now()-lastProbe<900||w.isDestroyed())return;lastProbe=Date.now();probing=true;try{const account=await backend.handle('session.account',{});if(account?.id){completed=true;win?.webContents.send('zhiyun:session',account);resolve(account);w.close();}}catch{}finally{probing=false;}};w.webContents.on('did-navigate',()=>void probe());w.webContents.on('did-stop-loading',()=>void probe());w.on('closed',()=>{loginWin=null;if(!completed)resolve(null);});void w.loadURL('https://classroom.zju.edu.cn/').catch(()=>{dialog.showErrorBox('登录页面无法打开','请检查网络连接后重试。');});});}
+async function openLogin(){
+ if(loginWin){loginWin.focus();return null;}
+ const generation=sessionGate.current();
+ if(!sessionGate.valid(generation))throw Error('正在退出登录');
+ return new Promise<any>(resolve=>{
+  const s=session.fromPartition('persist:zhiyun-campus');configureSession(s);
+  const owner=win&&!win.isDestroyed()?win.getBounds():undefined;const work=owner?screen.getDisplayMatching(owner).workArea:screen.getPrimaryDisplay().workArea;
+  const bounds=desktopWindowBounds(work,{width:1000,height:760,minWidth:520,minHeight:560},owner);
+  loginWin=new BrowserWindow({title:'登录智云课堂',parent:win??undefined,...bounds,backgroundColor:'#f3f6fa',webPreferences:{session:s,nodeIntegration:false,contextIsolation:true,sandbox:true,webSecurity:true}});
+  const w=loginWin;guardWindow(w,true);let probing=false,lastProbe=0,completed=false;
+  const probe=async()=>{if(probing||Date.now()-lastProbe<900||w.isDestroyed()||!sessionGate.valid(generation))return;lastProbe=Date.now();probing=true;try{
+   const account=await sessionGate.run<any>(()=>backend.handle('session.account',{}));
+   if(account?.id&&sessionGate.valid(generation)&&!w.isDestroyed()){completed=true;win?.webContents.send('zhiyun:session',account);resolve(account);w.close();}
+  }catch{}finally{probing=false;}};
+  w.webContents.on('did-navigate',()=>void probe());w.webContents.on('did-stop-loading',()=>void probe());
+  w.on('closed',()=>{if(loginWin===w)loginWin=null;if(!completed)resolve(null);});
+  void w.loadURL('https://classroom.zju.edu.cn/').catch(()=>{if(sessionGate.valid(generation))dialog.showErrorBox('登录页面无法打开','请检查网络连接后重试。');});
+ });
+}
+async function callWithSession(method:string,payload:any){
+ if(method==='session.logout')return sessionGate.logout(()=>{if(loginWin&&!loginWin.isDestroyed())loginWin.close();},()=>backend.handle(method,payload));
+ if(method==='session.restore'||method==='session.account')return sessionGate.run(()=>backend.handle(method,payload));
+ return backend.handle(method,payload);
+}
 async function writeExport(payload:any){const result=await backend.handle('notes.export',payload);if(result?.cancelled)return result;if(!result?.data)return result;const selected=await dialog.showSaveDialog(win!,{title:'导出课堂笔记',defaultPath:path.join(app.getPath('downloads'),safeName(result.filename||'课堂笔记.zip')),filters:[{name:'笔记文件',extensions:[result.extension||'zip']}]});if(selected.canceled||!selected.filePath)return{cancelled:true};const bytes=typeof result.data==='string'?Buffer.from(result.data,result.encoding==='base64'?'base64':'utf8'):Buffer.from(result.data);await fs.writeFile(selected.filePath,bytes);return{saved:true,path:selected.filePath};}
 app.whenReady().then(async()=>{if(!locked)return;const external=new ExternalAgentBroker(app.getPath('userData'));await external.start();const s=session.fromPartition('persist:zhiyun-campus');configureSession(s);configureSession(session.defaultSession);const emit=(event:string,data:any)=>{if(win&&!win.isDestroyed())win.webContents.send('zhiyun:'+event,data);};backend=await createServices(s,app.getPath('userData'),emit);
+ try{await backend.officialLogin.clear();}catch{dialog.showErrorBox('无法删除旧版校园账号','旧版保存的账号可能仍留在本机。当前版本不会使用它；请检查文件权限并重试退出登录。');}
  protocol.handle('zhiyun',async request=>{try {return await net.fetch(pathToFileURL(staticPath(path.join(__dirname,'../renderer'),request.url)).href);}catch{return new Response('Not found',{status:404});}});
  protocol.handle('zhiyun-resource',async request=>{try{return await backend.resolveResource(request);}catch{return new Response('Resource unavailable',{status:404});}});
  const bounds=desktopWindowBounds(screen.getPrimaryDisplay().workArea,{width:1440,height:940,minWidth:720,minHeight:540});
@@ -25,13 +50,13 @@ app.whenReady().then(async()=>{if(!locked)return;const external=new ExternalAgen
   if(method==='external.next')return external.next(async request=>{if(!win||win.isDestroyed())return false;const action=request.method==='do'?String(request.params.action||'').slice(0,80):request.method;const result=await dialog.showMessageBox(win,{type:'question',title:'外部程序请求访问',message:'本机程序请求使用智云助手：'+action,detail:'仅在这是你发起的操作时允许。',buttons:['拒绝','允许'],defaultId:0,cancelId:0});return result.response===1;});
   if(method==='external.reply'){await external.reply(String(payload?.id||''),payload?.result,typeof payload?.error==='string'?payload.error:undefined);return true;}
   if(method==='app.updateFeed'){const response=await net.fetch('https://api.github.com/repos/He-He-He-He-He-He/ZhiyunAssistant/releases?per_page=100',{credentials:'omit',redirect:'error',signal:AbortSignal.timeout(12000),headers:{Accept:'application/vnd.github+json'}});if(!response.ok)throw Error('更新服务暂不可用');const text=await response.text();if(text.length>2097152)throw Error('更新数据过大');return text;}
-  if(method==='login.open')return openLogin();if(method==='app.info')return{version:app.getVersion(),platform:process.platform,arch:process.arch,packaged:app.isPackaged};
+  if(method==='login.open'){await callWithSession('session.logout',{});return openLogin();}if(method==='app.info')return{version:app.getVersion(),platform:process.platform,arch:process.arch,packaged:app.isPackaged};
   if(method==='app.external'){if(!safeExternal(payload?.url))throw Error('无效链接');await shell.openExternal(payload.url);return true;}
   if(method==='clipboard.write'){let html=String(payload?.html||'');const items:Record<string,string|Blob>={'text/plain':String(payload?.text||'')};for(const url of (payload?.images||[]).slice(0,20)){if(!String(url).startsWith('zhiyun-resource://'))continue;const response=await backend.resolveResource(new Request(url));if(!response.ok)continue;const image=nativeImage.createFromBuffer(Buffer.from(await response.arrayBuffer()));if(image.isEmpty())continue;const png=image.toPNG();if(!items['image/png'])items['image/png']=new Blob([new Uint8Array(png)],{type:'image/png'});html=html.split(url).join(image.toDataURL());}if(html)items['text/html']=html;await clipboard.write([new ClipboardItem(items)]);return true;}if(method==='clipboard.read'){const rows=await clipboard.read();let html='';for(const item of rows)if(item.types.includes('text/html')){html=await (await item.getType('text/html')).text();break;}return{text:await clipboard.readText(),html};}
   if(method==='notes.pickImage'){const picked=await dialog.showOpenDialog(win!,{title:'选择图片',properties:['openFile'],filters:[{name:'图片',extensions:['png','jpg','jpeg','webp','gif','bmp']}]});if(picked.canceled)return null;const image=nativeImage.createFromPath(picked.filePaths[0]);if(image.isEmpty())throw Error('无法读取图片');return backend.handle(method,{...payload,filePath:picked.filePaths[0]});}
   if(method==='notes.export')return writeExport(payload);
   if(method==='resource.drag'){const result=await backend.handle(method,payload);if(result?.path){event.sender.startDrag({file:result.path,icon:nativeImage.createFromPath(result.path).resize({width:180})});}return true;}
-  return backend.handle(method,payload);
+  return callWithSession(method,payload);
  });
  app.on('before-quit',event=>{if(!closing){event.preventDefault();void flushAndQuit();}});
  await win.loadURL(UI_ORIGIN+'/');

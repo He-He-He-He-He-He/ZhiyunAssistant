@@ -18,6 +18,8 @@ export function validateArguments(value, schema, path = '参数') {
   }
   if (schema.enum && !schema.enum.includes(value)) throw new Error(path + '不是有效选项');
 }
+// Protocol markup returned as prose is not a successful tool invocation.
+export const hasToolMarkup = value => /<\s*\/?\s*[|｜]\s*DSML\s*[|｜]\s*(?:tool_calls|calls|invoke|parameter)\b/i.test(String(value || ''));
 export class AppActions {
   constructor() { this.actions = new Map(); }
   register(name, description, properties, required, execute) {
@@ -101,12 +103,12 @@ export class AgentRunner {
     const controller = new window.AbortController();
     guard.signal = controller.signal; this.cancelAction = () => controller.abort();
     // History contains human/assistant text only. Tool transcripts stay in this bounded run.
-    const previous=history.filter(m=>['user','assistant'].includes(m.role)&&typeof m.content==='string').slice(-12).map(m=>({role:m.role,content:m.content.slice(0,6000)}));
+    const previous=history.filter(m=>['user','assistant'].includes(m.role)&&typeof m.content==='string'&&!(m.role==='assistant'&&hasToolMarkup(m.content))).slice(-12).map(m=>({role:m.role,content:m.content.slice(0,6000)}));
     const messages=[{role:'system',content:AGENT_SYSTEM+'\n\n操作目录（用 app_do 调用；? 为可选参数，a|b 为可选值）：\n'+actionCatalogue(this.registry)}];
     // Summarised prior conversations are reference data, not incomplete model/tool messages.
     if(previous.length)messages.push({role:'user',content:'之前的对话记录（仅供参考）：'+JSON.stringify(previous)});
     messages.push({role:'user',content:text.slice(0,12000)});
-    let repeated = '', repeatCount = 0, final = '';
+    let repeated = '', repeatCount = 0, final = '', protocolRetries = 0;
     const searchResults = new Map();
     const execute = async (name, args) => {
       if (name !== 'search_material') { const result = await this.registry.execute(name, args, guard); this.observeAction?.(name,args,text,guard); return result; }
@@ -132,13 +134,22 @@ export class AgentRunner {
         guard(); let answer = '', result; append({ type: 'turn', index: step });
         // A slow or dropped connection gets one quiet retry before the task fails.
         for (let attempt = 0; ; attempt++) {
-          try { result = await this.stream(messages, delta => { if (serial !== this.serial) return; answer += delta; append({ type: 'delta', text: delta }); }, agentTools(this.registry, !!this.knowledge), cancel => this.cancelStream = cancel); break; }
+          try { result = await this.stream(messages, delta => { if (serial !== this.serial) return; answer += delta; if (!hasToolMarkup(answer)) append({ type: 'delta', text: delta }); }, agentTools(this.registry, !!this.knowledge), cancel => this.cancelStream = cancel); break; }
           catch (error) { guard(); if (attempt || !transient(error)) throw error; answer = ''; append({ type: 'retry', index: step, error: error.message }); }
         }
         guard(); this.cancelStream = null;
         if(result.finish_reason==='length')throw new Error('模型输出达到上限，未执行未完整的操作。请缩小任务范围或调整思考强度。');
         const calls = result.calls || [];
         if (!Array.isArray(calls) || calls.some(call => typeof call?.id !== 'string' || typeof call?.function?.name !== 'string')) throw new Error('AI 返回的操作格式不完整，请重试');
+        if (hasToolMarkup(result.answer || answer)) {
+          answer = ''; result.answer = '';
+          append({ type: 'retry', index: step, protocol: true });
+          if (!calls.length) {
+            if (protocolRetries++) throw new Error('模型未返回有效的操作指令，操作尚未执行，请重试');
+            messages.push({role:'user',content:'上一轮没有产生有效工具调用，操作未执行。请直接通过本次请求的 tools 和 tool_calls 调用 app_do，参数使用 action 和 args。不要把 DSML 或工具协议写入回复正文。'});
+            continue;
+          }
+        }
         if (!calls.length) { final = result.answer || answer; if(!final.trim())throw new Error('AI 未返回有效结果，请重试。'); append({ type: 'done', text: final }); return final; }
         if (calls.length > 32) throw new Error('一次操作过多，请缩小任务范围');
         messages.push({ role: 'assistant', content: result.answer || answer || null, reasoning_content: result.reasoning_content || '', tool_calls: calls });

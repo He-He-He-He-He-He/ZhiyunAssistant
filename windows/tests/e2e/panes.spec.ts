@@ -5,8 +5,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 let app: ElectronApplication, page: Page, folder: string;
 const course = { subId: 'panes-fixture', courseId: 'panes-course', title: '功能区测试课程', teacher: '测试教师', room: '测试教室', start: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600), end: (Math.floor((Date.now()/1000+28800)/86400)*86400-28800-2*86400+8*3600)+7200, status: '6' };
-test.beforeEach(async () => { folder = fs.mkdtempSync(path.join(os.tmpdir(), '智云助手功能区 ')); app = await electron.launch({ args: [path.resolve('.')], env: { ...process.env, ZHIYUN_TEST_DATA: folder }, timeout: 30000 }); page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded'); await expect(page.locator('body')).toContainText('隐私与数据'); });
+test.beforeEach(async () => {
+  folder = fs.mkdtempSync(path.join(os.tmpdir(), '智云助手功能区 '));
+  app = await electron.launch({ args: [path.resolve('.')], env: { ...process.env, ZHIYUN_TEST_DATA: folder }, timeout: 30000 });
+  page = await app.firstWindow(); await page.waitForLoadState('domcontentloaded'); await expect(page.locator('body')).toContainText('隐私与数据');
+});
 test.afterEach(async ({}, testInfo) => {
+  if (process.env.ZHIYUN_SELECTION_DIAGNOSTICS && page && !page.isClosed()) {
+    const diagnostics = await page.evaluate(() => (window as any).__selectionDiagnostics).catch(() => undefined);
+    if (diagnostics) await testInfo.attach('selection-diagnostics', { body: JSON.stringify(diagnostics, null, 2), contentType: 'application/json' });
+  }
   if (testInfo.status !== testInfo.expectedStatus && page && !page.isClosed()) {
     await page.screenshot({ path: testInfo.outputPath('pane-failure.png') }).catch(() => {});
     await fs.promises.writeFile(testInfo.outputPath('pane-failure.txt'), await page.locator('body').innerText().catch(() => ''));
@@ -78,6 +86,27 @@ async function start(kind: string, configured = true) {
   await expect(page.locator('.study-canvas')).toBeVisible();
 }
 async function answerTextPoints() {
+  // Isolate only the synthetic drag, after fixture navigation and first paint.
+  // Host pointermove events with buttons=0 can otherwise interrupt CDP's held
+  // button (setIgnoreMouseEvents does not stop these macOS events).
+  // Wait for ready-to-show before hiding, so main cannot show the window again.
+  await expect.poll(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().every(window => window.isVisible()))).toBe(true);
+  await app.evaluate(({ BrowserWindow }) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      window.webContents.setBackgroundThrottling(false);
+      window.hide();
+    }
+  });
+  expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some(window => window.isVisible()))).toBe(false);
+  if (process.env.ZHIYUN_SELECTION_DIAGNOSTICS) await page.locator('.ai-pane .answer-content').evaluate(element => {
+    const records: any[] = []; (window as any).__selectionDiagnostics = records;
+    const record = (event: Event) => {
+      const selection = window.getSelection(), box = element.getBoundingClientRect(), pointer = event as PointerEvent;
+      records.push({ event: event.type, time: performance.now(), x: pointer.clientX, y: pointer.clientY, buttons: pointer.buttons, trusted: event.isTrusted, pointerId: pointer.pointerId, top: box.top, left: box.left, text: element.textContent, selected: selection?.toString(), anchor: selection?.anchorNode?.textContent, anchorOffset: selection?.anchorOffset, focus: selection?.focusNode?.textContent, focusOffset: selection?.focusOffset });
+    };
+    for (const name of ['pointermove', 'pointerdown', 'pointerup', 'selectionchange']) document.addEventListener(name, record);
+    record(new Event('coordinates'));
+  });
   return page.locator('.ai-pane .answer-content').evaluate(element => {
     const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT), nodes: Text[] = [];
     let node: Node | null; while ((node = walker.nextNode())) nodes.push(node as Text);

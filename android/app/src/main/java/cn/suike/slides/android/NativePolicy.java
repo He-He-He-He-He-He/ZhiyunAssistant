@@ -12,6 +12,11 @@ final class NativePolicy {
         "zju.edu.cn", "chinamcloud.com", "chinamcloud.cn", "chinamcache.com"
     };
 
+    static String bridgeSecretAlias(String alias) throws IOException {
+        if ("zhiyun-official-session-v3".equals(alias) || "zhiyun-last-account-v1".equals(alias) || "zhiyun-deepseek-api-key-v1".equals(alias)) return alias;
+        throw new IOException("此安全存储不可由网页访问");
+    }
+
     static boolean under(File child, File root) throws IOException {
         String value = child.getCanonicalPath(), base = root.getCanonicalPath();
         return value.equals(base) || value.startsWith(base + File.separator);

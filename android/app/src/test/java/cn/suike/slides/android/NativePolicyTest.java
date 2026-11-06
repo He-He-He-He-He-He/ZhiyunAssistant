@@ -10,6 +10,12 @@ import static org.junit.Assert.*;
 
 /** Tests real network/file policy, including adversarial origins and canonical symlinks. */
 public class NativePolicyTest {
+    @Test public void onlyKnownNonPasswordAliasesAreBridgeAccessible() throws Exception {
+        for (String alias : new String[]{"zhiyun-official-session-v3", "zhiyun-last-account-v1", "zhiyun-deepseek-api-key-v1"})
+            assertEquals(alias, NativePolicy.bridgeSecretAlias(alias));
+        for (String alias : new String[]{"zhiyun-official-login-v1", "zhiyun-official-login-v2", "zhiyun-official-login-state-v1", "other", "", null})
+            assertThrows(IOException.class, () -> NativePolicy.bridgeSecretAlias(alias));
+    }
     @Test public void allowlistedHttpsOnly() throws Exception {
         assertEquals("classroom.zju.edu.cn",NativePolicy.https("https://classroom.zju.edu.cn/a",false).getHost());
         assertEquals("api.deepseek.com",NativePolicy.https("https://api.deepseek.com/chat/completions",false).getHost());

@@ -13,7 +13,7 @@ for tool in node xcrun lipo sips iconutil codesign hdiutil ditto shasum; do
 done
 node --experimental-vm-modules generate-models.cjs
 version="$(node -p 'require("./package.json").version')"
-build_number=23
+build_number=24
 build_root="$PWD/build"
 mkdir -p "$build_root"
 staging="$(mktemp -d "$build_root/staging.XXXXXX")"
@@ -57,10 +57,25 @@ PLIST
 cp scripts/zhiyun_mcp.py "$app/Contents/Resources/zhiyun_mcp.py"
 cp LICENSE "$app/Contents/Resources/LICENSE-GPL-3.0.txt"
 cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/THIRD_PARTY_NOTICES.md"
-# Ad-hoc signing is for local builds. Developer ID signing/notarization remains a
-# separate release step and never requires embedding certificates or secrets.
-codesign --force --deep --sign - --identifier cn.suike.slides.mac.showcase "$app"
+# Signing is opt-in; local builds use ad-hoc signatures. Credentials are never
+# embedded in this tree. Notarization uses an explicitly configured Keychain profile.
+if [[ -n "${ZHIYUN_NOTARY_PROFILE:-}" && -z "${ZHIYUN_SIGN_IDENTITY:-}" ]]; then
+  printf '%s\n' 'Notarization requires ZHIYUN_SIGN_IDENTITY.' >&2
+  exit 1
+fi
+if [[ -n "${ZHIYUN_SIGN_IDENTITY:-}" ]]; then
+  codesign --force --deep --options runtime --timestamp --sign "$ZHIYUN_SIGN_IDENTITY" --identifier cn.suike.slides.mac.showcase "$app"
+else
+  codesign --force --deep --sign - --identifier cn.suike.slides.mac.showcase "$app"
+fi
 codesign --verify --deep --strict "$app"
+# Staple the actual staging app before creating BOTH shipping archives.
+if [[ -n "${ZHIYUN_NOTARY_PROFILE:-}" ]]; then
+  ditto -c -k --norsrc --keepParent "$app" "$staging/notary.zip"
+  xcrun notarytool submit "$staging/notary.zip" --keychain-profile "$ZHIYUN_NOTARY_PROFILE" --wait
+  xcrun stapler staple "$app"
+  xcrun stapler validate "$app"
+fi
 rm -rf "$build_root/智云助手.app"
 ditto "$app" "$build_root/智云助手.app"
 dmg_stage="$staging/dmg"
@@ -68,6 +83,14 @@ mkdir -p "$dmg_stage"
 ditto "$app" "$dmg_stage/智云助手.app"
 ln -s /Applications "$dmg_stage/Applications"
 hdiutil create -volname "智云助手" -srcfolder "$dmg_stage" -ov -format UDZO "$build_root/智云助手-Mac-$version.dmg" >/dev/null
+if [[ -n "${ZHIYUN_SIGN_IDENTITY:-}" ]]; then
+  codesign --force --timestamp --sign "$ZHIYUN_SIGN_IDENTITY" "$build_root/智云助手-Mac-$version.dmg"
+fi
+if [[ -n "${ZHIYUN_NOTARY_PROFILE:-}" ]]; then
+  xcrun notarytool submit "$build_root/智云助手-Mac-$version.dmg" --keychain-profile "$ZHIYUN_NOTARY_PROFILE" --wait
+  xcrun stapler staple "$build_root/智云助手-Mac-$version.dmg"
+  xcrun stapler validate "$build_root/智云助手-Mac-$version.dmg"
+fi
 ditto -c -k --norsrc --keepParent "$app" "$build_root/智云助手-Mac-$version.zip"
 (cd "$build_root" && shasum -a 256 "智云助手-Mac-$version.dmg" "智云助手-Mac-$version.zip" > SHA256SUMS.txt)
 printf 'Built universal 晴空 showcase app %s (%s), DMG and ZIP.\n' "$version" "$build_number"

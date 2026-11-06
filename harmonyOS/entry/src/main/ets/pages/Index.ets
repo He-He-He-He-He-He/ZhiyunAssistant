@@ -49,11 +49,14 @@ import { KeyCode } from '@kit.InputKit';
 import { VideoNetwork } from '../services/VideoNetwork';
 import { manualPage, displayedGroups } from '../model/StudyNavigation';
 import { SessionStore } from '../services/SessionStore';
+import { OfficialLoginStore, LoginCredentials } from '../services/OfficialLoginStore';
+import { NativeLoginCoordinator, nativeLoginMessage, nativeLoginEnabled } from '../services/NativeLogin';
+import { NativeAccountAcceptance } from '../services/NativeAccountAcceptance';
 import { inspectLoginScript, submitLoginScript, officialDigitScript, officialLoginUrl, webString } from '../model/OfficialLogin';
 import { common } from '@kit.AbilityKit';
 import { webview } from '@kit.ArkWeb';
 import { Account, Course, copyStringMap, Slide, Transcript, PageGroup, phase, shanghaiDate, clockTime, stamp, distinctSlides, groupPages, mergeSlides, mergeLines, reconcileLines, pageCapacity, selectedAfterUpdate, visiblePageGroups, spreadStart } from '../model/Timeline';
-import { Zhiyun, SubInfo, AccessDenied, HistoryState } from '../services/Zhiyun';
+import { Zhiyun, SubInfo, AccessDenied, AuthenticationExpired, HistoryState } from '../services/Zhiyun';
 import { LocalStore, Snapshot, key } from '../services/LocalStore';
 import { LearningProgress, readLearningProgress, progressPage } from '../model/LearningProgress';
 import { TranscriptPane } from '../components/TranscriptPane';
@@ -288,7 +291,28 @@ struct Index {
   private jumpDialog: CustomDialogController = new CustomDialogController({ builder: TimeJumpDialog({ maxSeconds: this.lessonDuration(), initialSeconds: this.showVideo ? this.videoTime : this.groups[this.selected]?.slide.t || 0, onJump: (seconds: number) => this.jumpToTime(seconds) }), autoCancel: true, onWillAppear: () => { this.jumpingDialogOpen = true; }, onWillDisappear: () => { this.jumpingDialogOpen = false; } });
   private pageDialog: CustomDialogController = new CustomDialogController({ builder: PageJumpDialog({ initialPage: this.presentationSlides().findIndex((s: Slide) => s.id === this.groups[this.selected]?.slide.id) + 1, pages: this.presentationSlides().length, onJump: (page: number) => this.jumpToPage(page) }), autoCancel: true, onWillAppear: () => { this.jumpingDialogOpen = true; }, onWillDisappear: () => { this.jumpingDialogOpen = false; } });
   private authProbe: boolean = false;
+  private authDispatchPending: boolean = false;
+  private authEpoch: number = 0;
   private authRetry: number = -1;
+  @State authCleanup: boolean = false;
+  @State authCleanupFailed: boolean = false;
+  @State credentialDialog: boolean = false;
+  @State credentialTest: boolean = false;
+  @State credentialConsent: boolean = false;
+  @State credentialUser: string = '';
+  @State credentialPassword: string = '';
+  @State credentialBusy: boolean = false;
+  @State credentialMessage: string = '';
+  @State credentialStatus: string = '未读取保存状态';
+  @State nativeRecoveryBusy: boolean = false;
+  private nativeRecoveryBlocked: boolean = false;
+  private nativeRecoveryTask: Promise<Account | undefined> | undefined = undefined;
+  private nativeLogin: NativeLoginCoordinator = new NativeLoginCoordinator();
+  private credentialFlow: NativeLoginCoordinator | undefined = undefined;
+  private credentialCompletion: Promise<void> | undefined = undefined;
+  private finishCredential: (() => void) | undefined = undefined;
+  private credentialCancelTask: Promise<void> | undefined = undefined;
+  private credentialEpoch: number = 0;
   private catalogAt: number = 0;
   private permissionAt: number = 0;
   private permissionLive: boolean = false;
@@ -353,8 +377,13 @@ struct Index {
   }
   private lastUpdateNotice: string = '';
   private checkReleaseUpdate(): void { new ReleaseUpdates(this.getUIContext().getHostContext() as common.UIAbilityContext).check(false).then(value => { if (this.privacyAccepted && value.available && value.available !== this.lastUpdateNotice) { this.lastUpdateNotice = value.available; this.getUIContext().getPromptAction().showToast({ message: '发现新版本 ' + value.available + '，可在隐私页面检查更新', duration: 3000 }); } }).catch(() => {}); }
-  private async restoreAccount(): Promise<void> { const gen = this.generation; await SessionStore.restore(); const account = await SessionStore.savedAccount(); if (gen !== this.generation || !this.privacyAccepted) return; if (account && !this.account) { this.account = account; this.initializeStore(account); this.screen = 'home'; } this.resume(); }
+  private async restoreAccount(): Promise<void> { const gen = this.generation; await SessionStore.restore(); const account = await SessionStore.savedAccount(); if (gen !== this.generation || !this.privacyAccepted) return; if (account && !this.account) { this.account = account; this.initializeStore(account); this.screen = 'home'; } this.refreshCredentialStatus(); this.resume(); }
   private initializeStore(account: Account): void {
+    if (NativeAccountAcceptance.enabled() && (!account.username ||
+      !NativeAccountAcceptance.matches(account.id, account.tenantId, account.username))) {
+      this.authEpoch++; this.nativeLogin?.cancel(); NativeAccountAcceptance.revoke();
+    }
+    this.refreshCredentialStatus();
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     this.library?.pause();
     this.store = new LocalStore(context, account.tenantId + ':' + account.id); this.collections.bind(this.store as CollectionStorage);
@@ -374,6 +403,8 @@ struct Index {
   private refreshLibrary(progressOnly: boolean = false): void { if (progressOnly && !this.offlineOpen && !this.downloadsOpen) return; const entries = this.library?.list() || []; if (this.offlineEntries !== entries) this.offlineEntries = entries; this.downloadJobs = this.library?.tasks() || []; }
 
   onBackPress(): boolean {
+    if (this.credentialDialog) { this.closeCredentialDialog(); return true; }
+    if (this.nativeRecoveryBusy) { this.authEpoch++; this.nativeLogin.cancel(); this.message = '原生重登已取消，请使用官方页面手动登录'; }
     if (this.appAssistantOpen) { this.appAssistantOpen = false; this.assistantEditing = false; return true; }
     if (this.jumpingDialogOpen) { this.jumpDialog.close(); this.pageDialog.close(); this.jumpingDialogOpen = false; return true; }
     if (this.privacyOpen) { this.privacyOpen = false; return true; }
@@ -392,7 +423,7 @@ struct Index {
     if (this.offlineOpen) { this.openHomePage(''); return true; }
 
     if (this.screen === 'login') {
-      if (this.authOfficial) { this.authOfficial = false; this.authSubmitting = false; this.authSubmitted = false; this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); }
+      if (this.authOfficial) { this.authEpoch++; this.authProbe = false; this.authDispatchPending = false; this.authOfficial = false; this.authSubmitting = false; this.authSubmitted = false; this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); }
       else this.leaveLogin();
       return true;
     }
@@ -402,11 +433,12 @@ struct Index {
     return false;
   }
   private leaveLogin(): void {
+    this.authEpoch++; this.authProbe = false; this.authDispatchPending = false;
     this.authPassword = ''; this.authSubmitting = false; this.authSubmitted = false; this.authOfficial = false;
     clearTimeout(this.authTimer); clearTimeout(this.authRetry); this.screen = 'home'; this.resume();
   }
-  aboutToDisappear(): void { this.saveProgress(true); this.stopGravity(); this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); this.stop(); }
-  private visibilityChanged(): void { this.rotationWatch(); if (this.foreground) { this.resume(); if (this.privacyAccepted) this.checkReleaseUpdate(); } else { KnowledgeJobs.cancel(); this.saveProgress(true); this.playback.pause(); this.library?.pause(); this.stop(); } }
+  aboutToDisappear(): void { this.authEpoch++; this.authProbe = false; this.authDispatchPending = false; this.closeCredentialDialog(); this.saveProgress(true); this.stopGravity(); this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); this.stop(); }
+  private visibilityChanged(): void { this.rotationWatch(); if (this.foreground) { if (this.privacyAccepted && this.screen !== 'login' && !this.authCleanup && !this.authCleanupFailed) this.restoreAccount(); else this.resume(); if (this.privacyAccepted) this.checkReleaseUpdate(); } else { this.authEpoch++; this.authProbe = false; this.authDispatchPending = false; this.authSubmitting = false; this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); this.closeCredentialDialog(); KnowledgeJobs.cancel(); this.saveProgress(true); this.playback.pause(); this.library?.pause(); this.stop(); } }
   private stop(): void {
     this.cancelCameraProbe();
     if (this.course && this.screen === 'lesson' && !this.offlineViewing && !this.demo) { try { this.store?.save({ course: this.course, slides: this.slides, lines: this.lines, savedAt: Date.now() }); } catch (_) {} }
@@ -424,26 +456,30 @@ struct Index {
     if (this.foreground && !this.demo && !this.offlineViewing) this.timer = setTimeout(() => this.tick(), delay);
   }
   private async tick(): Promise<void> {
-    if (this.busy || !this.foreground || this.demo || this.offlineViewing || this.offlineOpen) return;
+    if (this.authCleanup || this.authCleanupFailed || this.busy || this.nativeRecoveryBusy || !this.foreground || this.demo || this.offlineViewing || this.offlineOpen || (!this.account && this.screen !== 'login' && !SessionStore.hasRecoverableSession())) return;
     this.busy = true;
     const gen = this.generation;
+    let recoveredNative = false;
+    let authenticatedRefresh = false;
     this.now = Date.now() / 1000;
     try {
       if (!this.account || this.screen === 'login') {
         const account = await this.api.account();
+        authenticatedRefresh = true;
         if (gen !== this.generation) return;
         const saved = await SessionStore.saveCurrent().then(() => true).catch(() => false);
         if (gen !== this.generation) return;
-        await SessionStore.rememberAccount(account).catch(() => {}); if (gen !== this.generation) return; this.account = account;
+        const identitySaved = await SessionStore.rememberAccount(account).then(() => true).catch(() => false); if (gen !== this.generation) return; this.account = account;
         this.initializeStore(account);
-        this.screen = 'home'; this.message = saved ? '' : '登录状态暂未保存，下次可能需要重新登录'; this.catalogAt = 0;
-        this.authPassword = ''; this.authSubmitting = false; clearTimeout(this.authTimer); clearTimeout(this.authRetry);
+        this.screen = 'home'; this.message = saved && identitySaved ? '' : '登录状态暂未保存，下次可能需要重新登录'; this.catalogAt = 0;
+        this.authEpoch++; this.authProbe = false; this.authDispatchPending = false; this.authPassword = ''; this.authSubmitting = false; clearTimeout(this.authTimer); clearTimeout(this.authRetry);
         webview.WebCookieManager.saveCookieAsync().catch(() => {});
       }
       if (this.screen === 'home' && !this.plaza && !this.allCoursesOpen && this.now - this.catalogAt > 30) {
         const courses = await this.api.courses(this.account!);
+        authenticatedRefresh = true;
         if (gen !== this.generation) return;
-        this.now = Date.now() / 1000; this.courses = courses; this.coursePermissions = this.api.cachedPermissions(courses); this.catalogAt = this.now; this.message = '';
+        this.now = Date.now() / 1000; this.courses = courses; this.coursePermissions = this.api.cachedPermissions(courses); this.catalogAt = this.now; if (this.message !== '登录状态暂未保存，下次可能需要重新登录') this.message = '';
         const force = this.forcePermissionRefresh; this.forcePermissionRefresh = false;
         await Promise.all([this.api.refreshToday(courses), this.api.permissions(courses, (states: Record<string, string>) => {
           if (gen === this.generation) this.coursePermissions = copyStringMap(states);
@@ -453,12 +489,20 @@ struct Index {
       }
       if (this.course && (this.screen === 'waiting' || this.screen === 'lesson')) {
         await this.syncLesson(gen);
+        authenticatedRefresh = true;
       }
       if (gen !== this.generation) return;
       this.failureCount = 0;
+      // Normal authenticated refresh, not just CAS success, ends a 401 episode.
+      if (authenticatedRefresh) this.nativeRecoveryBlocked = false;
     } catch (err) {
       if (gen !== this.generation) return;
       this.failureCount++;
+      if (err instanceof AuthenticationExpired && err.classroom && this.account && this.screen !== 'login') {
+        recoveredNative = await this.recoverNativeSession();
+        if (recoveredNative) { this.catalogAt = 0; this.forcePermissionRefresh = true; }
+        return;
+      }
       if (err instanceof AccessDenied && this.course) {
         if (this.courseReturnStack.length) { this.returnReferencedCourse(); this.message = '引用课次当前无法访问，已返回原课程'; return; }
         this.live.close(); this.liveAddress = ''; this.store?.cancel();
@@ -467,11 +511,12 @@ struct Index {
       }
       if (this.account) this.message = (err as Error).message || '连接暂时中断，恢复后会自动补齐';
       else this.message = '';
+      if (this.screen !== 'login' && /登录失效|重新登录|请先登录/.test(String((err as Error)?.message || ''))) this.message = '登录已失效，请使用官方页面手动登录；仅确定的课堂 401 才尝试已同意的一次原生重登';
     } finally {
       if (gen === this.generation) {
         this.busy = false;
         const normal = this.screen === 'login' ? 1000 : this.screen === 'lesson' ? (Number(this.info?.sub_status) !== 1 ? ((this.transcription || this.skipEmpty) && !this.lines.length ? 8000 : 60000) : (this.transcription || this.skipEmpty || this.smartSkip || this.aiOpen || this.summaryOpen) ? 4000 : 8000) : this.screen === 'waiting' ? 5000 : 15000;
-        this.schedule(this.screen === 'login' ? normal : this.failureCount ? Math.min(60000, Math.max(normal, 3000) * Math.pow(2, Math.min(4, this.failureCount))) : normal);
+        this.schedule(recoveredNative ? 100 : this.screen === 'login' ? normal : this.failureCount ? Math.min(60000, Math.max(normal, 3000) * Math.pow(2, Math.min(4, this.failureCount))) : normal);
       }
     }
   }
@@ -714,13 +759,34 @@ struct Index {
     this.stop(); this.demo = false; this.screen = 'home'; this.course = undefined; this.slides = []; this.groups = []; this.lines = []; this.imageUris = {}; this.message = ''; this.catalogAt = 0; this.forcePermissionRefresh = true; this.tick();
   }
   private async logout(): Promise<void> {
+    if (this.authCleanup) return;
+    this.authCleanup = true; this.authCleanupFailed = true;
+    NativeAccountAcceptance.revoke();
+    this.authEpoch++; this.authProbe = false; this.authDispatchPending = false;
+    this.credentialEpoch++; this.nativeLogin?.cancel(); this.credentialPassword = ''; this.credentialUser = ''; this.credentialDialog = false;
+    const credentialCleanup = OfficialLoginStore.clear().then(() => true).catch(() => false);
+    const credentialCompletion = this.credentialCompletion;
+    const nativeCompletion = this.nativeRecoveryTask;
     KnowledgeJobs.cancel();
     this.closeMedia(); this.library?.pause(); this.offlineViewing = false; this.offlineOpen = false;
-    this.stop(); webview.WebCookieManager.clearAllCookiesSync(); await SessionStore.clear();
+    this.stop();
+    try { this.web.loadUrl('about:blank'); } catch (_) {}
+    let failed = false;
+    try { webview.WebCookieManager.clearAllCookiesSync(); } catch (_) { failed = true; }
     this.api.usePermissionStorage(undefined); this.trimBorders = false;
     this.coursePermissions = {}; this.plaza = false; this.allCoursesOpen = false; this.collectionPage = ''; this.collections.bind(undefined); this.account = undefined; this.course = undefined; this.store = undefined; this.courses = []; this.slides = []; this.lines = []; this.groups = []; this.imageUris = {};
-    this.offlineEntries = []; this.downloadJobs = []; this.library = undefined; this.notesLibrary = false; this.cacheSettings = false; this.downloadsOpen = false; this.lessonDownloadOpen = false; this.collectionPage = ''; this.courseReturnStack = []; this.pendingCourseJump = undefined; this.authOfficial = false; this.authSubmitting = false; this.authSubmitted = false; this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry);
-    this.demo = false; this.screen = 'home'; this.message = '';
+    this.offlineEntries = []; this.downloadJobs = []; this.library = undefined; this.notesLibrary = false; this.cacheSettings = false; this.downloadsOpen = false; this.lessonDownloadOpen = false; this.collectionPage = ''; this.courseReturnStack = []; this.pendingCourseJump = undefined; this.authOfficial = false; this.authSubmitting = false; this.authSubmitted = false; this.authUser = ''; this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry);
+    this.demo = false; this.screen = 'home'; this.message = '正在清理登录数据';
+    try { await SessionStore.clear(); } catch (_) { failed = true; }
+    if (!await credentialCleanup) failed = true;
+    if (credentialCompletion) await credentialCompletion;
+    if (nativeCompletion) await nativeCompletion.catch(() => {});
+    this.nativeRecoveryBusy = false; this.nativeRecoveryBlocked = false;
+    this.credentialBusy = false; this.credentialFlow = undefined;
+    try { webview.WebCookieManager.clearAllCookiesSync(); } catch (_) { failed = true; }
+    this.authCleanupFailed = failed; this.authCleanup = false;
+    this.credentialStatus = '未保存账号';
+    this.message = failed ? '退出清理未完成：旧会话或旧版密码可能仍在本机，请重试清理' : '';
   }
   private toggleTranscription(): void {
     if (this.unavailablePane('transcript')) return;
@@ -1372,6 +1438,9 @@ struct Index {
           if (this.account) {
             Button('应用助手').fontSize(12).height(32).backgroundColor(this.appAssistantOpen ? '#E2F0FF' : Color.Transparent).fontColor('#1F7BFF').onClick(() => this.appAssistantOpen = !this.appAssistantOpen)
             Text(this.account.name).fontSize(13).fontColor('#566A85').maxLines(1).constraintSize({ maxWidth: 120 })
+            Button('原生验证与保存账号').fontSize(12).height(32).fontColor('#1F7BFF').backgroundColor(Color.Transparent).enabled(!this.credentialBusy && !this.nativeRecoveryBusy).onClick(() => this.openCredentialDialog())
+            Text(this.credentialStatus).fontSize(11).fontColor('#566A85')
+            Button('退出后使用官方页面登录').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#1F7BFF').onClick(() => this.manualReauthenticate())
             Button('隐私').fontSize(12).height(32).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.privacyOpen = true)
             Button('退出登录').fontSize(12).height(32).backgroundColor(Color.Transparent).fontColor('#1F7BFF').onClick(() => this.logout())
           } else { Button('隐私').fontSize(12).height(32).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => this.privacyOpen = true) }
@@ -1425,6 +1494,114 @@ struct Index {
       CourseList({ chronological: true, descending: this.recent, collections: this.collections, collectionRevision: this.collectionRevision, courses: this.visibleCourses(), permissions: this.coursePermissions, now: this.now, busy: this.busy, onEnter: (c: Course) => { this.enter(c); } })
     }.layoutWeight(1).width('100%').padding({ left: this.windowWidth < 600 ? 14 : 24, right: this.windowWidth < 600 ? 14 : 24 })
   }
+  private makeCredentialFlow(): NativeLoginCoordinator { return this.nativeLogin; }
+  private async manualReauthenticate(): Promise<void> {
+    if (this.authCleanup) return;
+    await this.closeCredentialDialog(); await this.logout();
+    if (this.authCleanupFailed || !this.foreground) return;
+    this.beginLogin(); this.authOfficial = true;
+  }
+  private async refreshCredentialStatus(): Promise<void> {
+    const account = this.account, epoch = this.authEpoch;
+    if (!account) return;
+    const accountId = account.id, tenantId = account.tenantId;
+    const status = await OfficialLoginStore.status({ id: account.id, tenantId: account.tenantId });
+    if (epoch === this.authEpoch && this.account?.id === accountId && this.account?.tenantId === tenantId)
+      this.credentialStatus = nativeLoginEnabled() ? '本次原生验收许可已开启；' + status : status;
+  }
+  private async recoverNativeSession(): Promise<boolean> {
+    const account = this.account;
+    if (this.nativeRecoveryBlocked) { this.message = '本轮原生重登已尝试；不会再次提交密码，请使用官方页面手动登录'; return false; }
+    if (!account || this.nativeRecoveryBlocked || this.credentialBusy || this.nativeRecoveryBusy || !this.foreground || this.authCleanup || this.authCleanupFailed) return false;
+    this.nativeRecoveryBlocked = true; this.nativeRecoveryBusy = true;
+    const epoch = this.authEpoch, accountId = account.id, tenantId = account.tenantId, canonical = account.username;
+    const current = (): boolean => epoch === this.authEpoch && this.foreground && !this.authCleanup && !this.authCleanupFailed &&
+      this.account?.id === accountId && this.account?.tenantId === tenantId && this.account?.username === canonical;
+    this.message = '课堂会话已失效，正在尝试一次已授权的原生重登…';
+    this.api.cancel();
+    try {
+      const job = this.nativeLogin.recover(true, account, current); this.nativeRecoveryTask = job;
+      const recovered = await job;
+      if (!current()) return false;
+      if (!recovered) { this.message = '当前账号无可用的一次重登凭据，请退出后使用官方页面手动登录'; return false; }
+      this.account = recovered; this.initializeStore(recovered);
+      this.catalogAt = 0; this.coursePermissions = {}; this.forcePermissionRefresh = true;
+      this.downloadScopeRefresh++; this.refreshLibrary(); this.failureCount = 0;
+      this.message = '已通过原生验证恢复课堂会话；交互端仍使用官方既有流程';
+      return true;
+    } catch (error) { if (current()) this.message = nativeLoginMessage(error); return false; }
+    finally { this.nativeRecoveryTask = undefined; this.nativeRecoveryBusy = false; if (current()) this.refreshCredentialStatus(); }
+  }
+  private openCredentialDialog(): void {
+    if (!this.account || this.authCleanup || this.authCleanupFailed || this.credentialBusy || this.nativeRecoveryBusy) return;
+    this.credentialTest = false; this.credentialConsent = false;
+    this.credentialUser = this.account.username || ''; this.credentialPassword = '';
+    this.credentialMessage = nativeLoginEnabled() ? '本次许可的验证保存仅一次；成功后只允许持久预留控制的一次 401 重登。' : '生产默认关闭。请从隐私页进入“原生账号验收（测试）”，阅读风险并明确勾选；离线演练仍可独立使用。';
+    this.credentialDialog = true; this.refreshCredentialStatus();
+  }
+  private openNativeAcceptance(): void {
+    this.privacyOpen = false;
+    if (!this.account?.username || this.demo || !this.foreground || this.screen === 'login') {
+      this.message = '请先使用官方页面登录真实账号，再进入原生账号验收；离线演练身份不可授权。'; return;
+    }
+    this.openCredentialDialog();
+    if (this.credentialDialog) {
+      this.credentialTest = true;
+      this.credentialMessage = NativeAccountAcceptance.enabled() ? '本次启动的验收许可已开启；不会通过再次点击恢复验证或密码尝试额度。' :
+        '测试功能会向学校真实提交一次账号密码验证，并在身份核验后加密保存；可能要求验证码或触发账号限流。必须手动输入密码并勾选风险同意。';
+    }
+  }
+  private async closeCredentialDialog(): Promise<void> {
+    if (this.credentialCancelTask) return this.credentialCancelTask;
+    const wasBusy = this.credentialBusy; this.credentialEpoch++;
+    this.authEpoch++;
+    if (this.credentialFlow) this.credentialFlow.cancel(); else this.nativeLogin?.cancel();
+    this.credentialPassword = ''; this.credentialUser = ''; this.credentialConsent = false; this.credentialDialog = false;
+    if (wasBusy) NativeAccountAcceptance.revoke();
+    if (!wasBusy) return;
+    const completion = this.credentialCompletion;
+    const task = async (): Promise<void> => {
+      let failed = false;
+      try { await OfficialLoginStore.clear(); } catch (_) { failed = true; }
+      if (completion) await completion;
+      if (failed) { this.authCleanupFailed = true; this.message = '凭据清理未完成，请重试清理'; }
+      this.credentialBusy = false; this.credentialFlow = undefined;
+    };
+    this.credentialCancelTask = task();
+    try { await this.credentialCancelTask; } finally { this.credentialCancelTask = undefined; }
+  }
+  private async enrollCredential(): Promise<void> {
+    const account = this.account;
+    if (!account || this.demo || !this.credentialDialog || this.credentialBusy || this.nativeRecoveryBusy || this.authCleanup || this.authCleanupFailed || !this.foreground || !this.credentialUser.trim() || !this.credentialPassword) return;
+    if (this.credentialTest && (!this.credentialConsent || NativeAccountAcceptance.enabled())) return;
+    const gen = ++this.credentialEpoch, authEpoch = this.authEpoch, accountId = account.id, tenantId = account.tenantId, canonical = account.username;
+    const credentials: LoginCredentials = { username: this.credentialUser.trim(), password: this.credentialPassword };
+    this.credentialPassword = ''; this.credentialBusy = true; this.credentialMessage = '';
+    this.credentialCompletion = new Promise<void>((resolve: () => void) => { this.finishCredential = resolve; });
+    let acceptanceGranted = false;
+    try {
+      if (this.credentialTest) {
+        NativeAccountAcceptance.grant(account.id, account.tenantId, account.username || '', this.credentialConsent);
+        acceptanceGranted = true; this.credentialConsent = false;
+      }
+      const flow = this.makeCredentialFlow(); this.credentialFlow = flow;
+      const current = (): boolean => gen === this.credentialEpoch && authEpoch === this.authEpoch && this.foreground && !this.authCleanup &&
+        !this.authCleanupFailed && this.account?.id === accountId && this.account?.tenantId === tenantId && this.account?.username === canonical;
+      await flow.enroll(true, credentials, account, current);
+      if (!current()) return;
+      this.nativeRecoveryBlocked = false;
+      this.credentialMessage = '原生验证通过，凭据已加密保存；确定的课堂 401 时允许一次重登，失败需人工处理。';
+      this.refreshCredentialStatus();
+    } catch (err) {
+      if (acceptanceGranted) NativeAccountAcceptance.revoke();
+      if (gen === this.credentialEpoch) this.credentialMessage = nativeLoginMessage(err);
+    } finally {
+      credentials.password = ''; credentials.username = '';
+      if (gen === this.credentialEpoch) { this.credentialBusy = false; this.credentialFlow = undefined; }
+      const finish = this.finishCredential; this.finishCredential = undefined; this.credentialCompletion = undefined;
+      if (finish) finish();
+    }
+  }
   private focusLogin(): void {
     if (this.screen === 'login' && !this.authOfficial && !this.authSubmitting) setTimeout(() => this.getUIContext().getFocusController().requestFocus(this.loginField), 30);
   }
@@ -1446,27 +1623,36 @@ struct Index {
   }
   private beginLogin(): void {
     if (!this.privacyAccepted) { this.privacyOpen = true; return; }
+    if (this.authCleanup || this.authCleanupFailed) { this.message = '请先重试清理旧登录数据'; return; }
+    if (this.account) { this.message = '请先退出当前账号，再手动登录'; return; }
+    try { webview.WebCookieManager.clearAllCookiesSync(); } catch (_) { this.message = '无法清除旧登录状态，请重试'; return; }
+    this.authEpoch++; this.authProbe = false; this.authDispatchPending = false;
     SessionStore.beginLogin();
+    // Reopen the school's entry for a fresh, explicit login.
+    try { if (!officialLoginUrl(this.web.getUrl())) this.web.loadUrl('https://tgmedia.cmc.zju.edu.cn?forward=https%3A%2F%2Fclassroom.zju.edu.cn%2F&tenant_code=112'); } catch (_) {}
     this.loginField = 'login-account'; this.screen = 'login'; setTimeout(() => { this.getUIContext().getFocusController().requestFocus('login-account'); }, 80); this.failureCount = 0; this.message = '';
     this.authSubmitted = false; this.authReturnHandled = false; this.authSubmitting = false; this.authOfficial = false; this.authError = ''; this.authPassword = '';
     this.resume();
   }
   private async loginPageReady(url: string): Promise<void> {
-    if ((this.screen !== 'login' && this.account) || !this.foreground) return;
+    if (this.authCleanup || this.authCleanupFailed || (this.screen !== 'login' && this.account) || !this.foreground) return;
     if (/^https:\/\/classroom\.zju\.edu\.cn(?:\/|$)/i.test(url)) {
       if (!this.authReturnHandled) { this.authReturnHandled = true; this.failureCount = 0; this.resume(); }
       return;
     }
     if (!officialLoginUrl(url) || this.authProbe) return;
     this.authProbe = true;
+    const gen = this.authEpoch;
     try {
       const status = JSON.parse(webString(await this.web.runJavaScript(inspectLoginScript))) as LoginStatus;
+      if (gen !== this.authEpoch || !this.foreground) return;
       this.authReady = status.ready;
-      if (status.error) { this.authError = status.error; this.authSubmitting = false; }
-      if (this.authSubmitted && status.captcha) { this.authOfficial = true; this.authSubmitting = false; }
+      if (status.error && this.authSubmitted && !this.authDispatchPending) { this.authError = status.error; this.authSubmitting = false; }
+      if (this.authSubmitted && !this.authDispatchPending && status.captcha) { this.authOfficial = true; this.authSubmitting = false; this.authError = '需要验证码，请在学校页面重新输入账号密码并完成验证'; }
       else if (this.authSubmitting && !this.authSubmitted && status.ready) this.dispatchLogin();
-    } catch (_) { this.authReady = false; }
+    } catch (_) { if (gen === this.authEpoch) this.authReady = false; }
     finally {
+      if (gen !== this.authEpoch) return;
       this.authProbe = false;
       if (this.authSubmitting && !this.authSubmitted && !this.authReady) {
         clearTimeout(this.authRetry);
@@ -1484,19 +1670,23 @@ struct Index {
   }
   private submitLogin(): void {
     if (!this.authUser.trim() || !this.authPassword || this.authSubmitting) return;
+    this.authEpoch++; this.authProbe = false; this.authDispatchPending = false;
     this.authError = ''; this.authSubmitting = true; this.authSubmitted = false;
     clearTimeout(this.authTimer);
     this.authTimer = setTimeout(() => {
       if (this.screen !== 'login' || !this.authSubmitting) return;
-      this.authSubmitting = false; this.authPassword = ''; clearTimeout(this.authRetry); this.authOfficial = true; this.authError = '学校登录暂未完成，请在此继续';
+      this.authEpoch++; this.authProbe = false; this.authDispatchPending = false; this.authSubmitting = false; this.authPassword = ''; clearTimeout(this.authRetry); this.authOfficial = true; this.authError = '学校登录暂未完成，请在此继续';
     }, 30000);
     this.probePendingLogin();
   }
   private async dispatchLogin(): Promise<void> {
     if (this.authSubmitted || !this.authSubmitting || !this.authPassword || !officialLoginUrl(this.web.getUrl())) return;
-    this.authSubmitted = true;
+    this.authSubmitted = true; this.authDispatchPending = true;
+    const gen = this.authEpoch;
     try {
       const result = webString(await this.web.runJavaScript(submitLoginScript(this.authUser.trim(), this.authPassword)));
+      if (gen !== this.authEpoch || this.screen !== 'login' || !this.foreground) return;
+      this.authDispatchPending = false;
       if (result === 'not-ready') {
         this.authSubmitted = false; this.authReady = false;
         clearTimeout(this.authRetry);
@@ -1504,19 +1694,19 @@ struct Index {
         return;
       }
       this.authPassword = '';
-      if (result === 'verification') { this.authOfficial = true; this.authSubmitting = false; clearTimeout(this.authTimer); }
+      if (result === 'verification') { this.authOfficial = true; this.authSubmitting = false; this.authError = '需要验证码，请在学校页面重新输入账号密码并完成验证'; clearTimeout(this.authTimer); }
       else if (result !== 'submitted') {
         this.authSubmitted = false; this.authSubmitting = false; clearTimeout(this.authTimer);
         this.authError = '学校登录页面已更新，请使用其他登录方式';
       }
-    } catch (_) { this.authPassword = ''; this.authSubmitting = false; clearTimeout(this.authTimer); this.authError = '连接学校登录服务失败，请重试'; }
+    } catch (_) { if (gen !== this.authEpoch || this.screen !== 'login' || !this.foreground) return; this.authDispatchPending = false; this.authPassword = ''; this.authSubmitting = false; clearTimeout(this.authTimer); this.authError = '连接学校登录服务失败，请重试'; }
   }
   @Builder
   private loginView() {
     Column() {
       Row() {
         Button('返回').height(32).fontSize(12).fontColor('#1F7BFF').backgroundColor('#E2F0FF').onClick(() => this.onBackPress())
-        if (this.authOfficial) { Text('请完成学校登录验证').fontSize(12).fontColor('#566A85').margin({ left: 12 }) }
+        if (this.authOfficial) { Text(this.authError || '请完成学校登录验证').fontSize(12).fontColor('#566A85').margin({ left: 12 }) }
       }.width('100%').padding(12)
       if (!this.authOfficial) {
         Column({ space: 18 }) {
@@ -1528,8 +1718,8 @@ struct Index {
           Button('登录').height(46).width('100%').fontSize(16).backgroundColor('#1F7BFF').fontColor('#FFFFFF')
             .enabled(!this.authSubmitting && !!this.authUser.trim() && !!this.authPassword).onClick(() => this.submitLogin())
           if (this.authSubmitting) { Text('正在登录智云课堂，请稍等').fontSize(12).fontColor('#1F7BFF') }
-          Text('使用浙江大学统一身份认证').fontSize(12).fontColor('#889AAF')
-          Button('其他登录方式').height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => { this.authOfficial = true; this.authSubmitting = false; this.authSubmitted = false; this.authPassword = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); })
+          Text('使用浙江大学统一身份认证。自动密码登录暂不可用；其他登录方式也不会保存密码。').fontSize(12).fontColor('#889AAF')
+          Button('其他登录方式').height(30).fontSize(12).fontColor('#1F7BFF').backgroundColor(Color.Transparent).onClick(() => { this.authEpoch++; this.authProbe = false; this.authDispatchPending = false; this.authOfficial = true; this.authSubmitting = false; this.authSubmitted = false; this.authPassword = ''; this.authError = ''; clearTimeout(this.authTimer); clearTimeout(this.authRetry); })
         }.width('90%').constraintSize({ maxWidth: 420 }).layoutWeight(1).justifyContent(FlexAlign.Center)
       }
     }.layoutWeight(this.authOfficial ? 0 : 1).width('100%')
@@ -1660,8 +1850,12 @@ struct Index {
       if (this.message && !this.videoFullscreen) {
         Row({ space: 10 }) {
           Text(this.message).fontSize(12).fontColor('#8C653D').layoutWeight(1)
-          Button('重试').height(28).fontSize(11).backgroundColor('#EEE5D8').fontColor('#8C653D').onClick(() => this.resume())
-          Button('登录').height(28).fontSize(11).backgroundColor('#EEE5D8').fontColor('#8C653D').onClick(() => { this.beginLogin(); })
+          if (this.authCleanupFailed) {
+            Button('重试清理').height(28).fontSize(11).backgroundColor('#EEE5D8').fontColor('#8C653D').onClick(() => this.logout())
+          } else {
+            Button('重试').height(28).fontSize(11).backgroundColor('#EEE5D8').fontColor('#8C653D').onClick(() => this.resume())
+            Button('登录').height(28).fontSize(11).backgroundColor('#EEE5D8').fontColor('#8C653D').onClick(() => { this.beginLogin(); })
+          }
         }.padding({ left: 16, right: 16, bottom: 10 }).width('100%')
       }
       if (this.account && this.screen === 'home' && this.windowWidth < 840) { this.homeNavigation() }
@@ -1676,7 +1870,7 @@ struct Index {
       else if (this.screen === 'lesson') { this.lesson() }
       else if (this.account && !this.plaza && !this.allCoursesOpen && !this.collectionPage) { this.catalog() }
       else if (!this.account) { this.welcome() }
-      if (this.privacyAccepted && (!this.account || this.screen === 'login') && !this.offlineViewing && !this.offlineOpen) { this.authenticationWeb() }
+      if (this.privacyAccepted && !this.authCleanup && !this.authCleanupFailed && this.screen === 'login' && !this.offlineViewing && !this.offlineOpen) { this.authenticationWeb() }
       if (this.account && this.collectionPage) {
         CollectionsPage({ now: this.now, collections: this.collections, revision: this.collectionRevision, kind: this.collectionPage, account: this.account, store: this.store, rootSequence: this.collectionRootSequence, backSequence: this.collectionBackSequence, active: this.foreground && this.screen === 'home', onBack: () => this.openHomePage(''), onEnter: (course: Course) => this.enter(course) }).layoutWeight(1).visibility(this.screen === 'home' ? Visibility.Visible : Visibility.None)
       }
@@ -1702,7 +1896,30 @@ struct Index {
     if (this.layoutOpen) {
       LayoutPanel({ rects: this.paneRects, activeIds: this.activePanes(), locked: this.layoutLocked, onLock: () => { this.layoutLocked = !this.layoutLocked; this.editingPane = ''; }, onSelect: (id: string) => { this.activePane = id; }, onChange: (rect: PaneRect) => this.setPane(rect), onPreset: (preset: string) => this.layoutPreset(preset), onClose: () => this.layoutOpen = false, onSave: () => this.saveLayout(), onLayer: (id: string, action: string) => { if (!this.layoutLocked) this.paneRects = reorderPanes(this.paneRects, id, action); } }).width(this.windowWidth > 700 ? 520 : '94%').borderRadius(18).clip(true).shadow({ radius: 20, color: '#18314733' })
     }
-    if (this.privacyOpen) { PrivacyPage({ consentRequired: !this.privacyAccepted, onClose: () => this.privacyOpen = false, onAccept: () => { this.privacyAccepted = true; this.privacyOpen = false; this.restoreAccount(); this.checkReleaseUpdate(); }, onWithdraw: () => { new PrivacyService(this.getUIContext().getHostContext() as common.UIAbilityContext).withdraw(); this.logout(); this.privacyAccepted = false; this.privacyOpen = true; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
+    if (this.credentialDialog) {
+      Column({ space: 14 }) {
+        Text(this.credentialTest ? '原生账号验收（测试）' : '验证并保存校园账号').fontSize(20).fontWeight(FontWeight.Bold)
+        Text('明确同意后，使用私有原生 CAS 会话验证一次，核对当前账号的 canonical username、id 和租户，再将输入账号及密码加密保存到本机资产库。输入别名不猜映射，最终身份必须与已登录账号一致。仅确定的课堂 401 允许一次重登，验证码、断网和失败转人工。取消验证会尝试清除本次保存凭据。').fontSize(14).lineHeight(22)
+        Text(nativeLoginEnabled() ? '本次启动已授权测试；并非正常生产自动登录' : '生产默认关闭；仅本原生测试页的手动勾选可授予本次内存许可').fontSize(12).fontColor('#A15438')
+        if (this.credentialTest) {
+          Text('风险：实验性认证及传统弱 RSA 协议兼容；仍严格验证 HTTPS。可能触发验证码、限流或失败。重启、升级、退出和切号关闭许可；后台取消在途，不恢复已消耗额度。密码只在内存及同意后的本机加密资产库中存在。').fontSize(12).fontColor('#A15438')
+          Row({ space: 8 }) {
+            Checkbox({ name: 'native-account-acceptance' }).select(this.credentialConsent).enabled(!this.credentialBusy && !NativeAccountAcceptance.enabled()).onChange((checked: boolean) => this.credentialConsent = checked)
+            Text('我已了解风险，同意本次启动验证保存一次及保存后一次 401 原生重登').fontSize(12).layoutWeight(1)
+          }
+        }
+        Text('当前绑定账号：' + (this.account?.username || '缺少官方 canonical username，请先手动登录更新身份')).fontSize(12)
+        TextInput({ text: this.credentialUser, placeholder: '学号／职工号／邮箱' }).enabled(!this.credentialBusy).onChange((value: string) => this.credentialUser = value)
+        TextInput({ text: this.credentialPassword, placeholder: '统一身份认证密码' }).type(InputType.Password).enabled(!this.credentialBusy).onChange((value: string) => this.credentialPassword = value)
+        if (this.credentialMessage) { Text(this.credentialMessage).fontSize(13) }
+        Button('同意额外验证并保存').enabled(!this.credentialBusy && !!this.credentialUser.trim() && !!this.credentialPassword &&
+          (this.credentialTest ? this.credentialConsent && !NativeAccountAcceptance.enabled() : nativeLoginEnabled() && NativeAccountAcceptance.enrollmentAvailable())).onClick(() => this.enrollCredential())
+        if (NativeAccountAcceptance.enabled()) { Button('关闭本次验收许可（不恢复额度）').enabled(!this.credentialBusy && !this.nativeRecoveryBusy).onClick(() => { this.nativeLogin.cancel(); NativeAccountAcceptance.revoke(); this.credentialConsent = false; this.refreshCredentialStatus(); this.credentialMessage = '本次许可已关闭，持久尝试额度保持原状。'; }) }
+        Button('退出后使用官方页面登录').enabled(!this.credentialBusy).onClick(() => this.manualReauthenticate())
+        Button(this.credentialBusy ? '取消验证' : '关闭').onClick(() => this.closeCredentialDialog())
+      }.padding(24).width('90%').constraintSize({ maxWidth: 520 }).backgroundColor('#FFFFFF').borderRadius(16).shadow({ radius: 20, color: '#18314733' }).zIndex(1000)
+    }
+    if (this.privacyOpen) { PrivacyPage({ consentRequired: !this.privacyAccepted, canNativeAcceptance: !!this.account?.username && !this.demo, onNativeAcceptance: () => this.openNativeAcceptance(), onClose: () => this.privacyOpen = false, onAccept: () => { this.privacyAccepted = true; this.privacyOpen = false; this.restoreAccount(); this.checkReleaseUpdate(); }, onWithdraw: () => { new PrivacyService(this.getUIContext().getHostContext() as common.UIAbilityContext).withdraw(); this.logout(); this.privacyAccepted = false; this.privacyOpen = true; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
     if (this.lessonDownloadOpen) { LessonDownload({ course: this.course, onClose: () => this.lessonDownloadOpen = false, onDownload: (options: DownloadOptions) => { if (this.course) this.library?.enqueue([this.course], options); this.lessonDownloadOpen = false; this.getUIContext().getPromptAction().showToast({ message: '已添加本节课下载任务', duration: 2000 }); } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }) }
     if (this.downloadsOpen) { DownloadSheet({ discoveries: this.downloadDiscovered, discovering: this.downloadScopeChecking, onRefreshScope: () => this.downloadScopeRefresh++, scoped: this.downloadScoped, backSequence: this.downloadBackSequence, fullPage: true, courses: this.downloadCourses, account: this.account, store: this.store, onClose: () => this.downloadsOpen = false, onDownload: (courses: Course[], options: DownloadOptions) => { this.library?.enqueue(courses, options); this.offlineOpen = this.screen === 'home'; } }).width('100%').height('100%').padding({ top: this.safeTop, bottom: this.safeBottom, left: this.safeLeft, right: this.safeRight }).backgroundColor('#EEF6FF') }
     if (this.account && this.privacyAccepted && !this.videoFullscreen) {

@@ -16,14 +16,19 @@ export const inspectLoginScript: string = `(() => {
 export function submitLoginScript(username: string, password: string): string {
   // Run the school's own submit handler so RSA, CSRF and captcha checks remain intact.
   return `(() => {
-    if (location.origin !== 'https://zjuam.zju.edu.cn' || location.pathname !== '/cas/login') return 'untrusted';
+    if (window.top !== window || location.origin !== 'https://zjuam.zju.edu.cn' || location.pathname !== '/cas/login') return 'untrusted';
+    const form = document.querySelector('form#fm1');
+    const user = form?.querySelector('input#username[name="username"]'), pass = form?.querySelector('input#password[name="password"][type="password"]'), button = form?.querySelector('#dl');
+    if (!form || !user || !pass || !button || user.disabled || pass.disabled || button.disabled || typeof window.checkForm !== 'function') return 'not-ready';
+    let action; try { action = new URL(form.getAttribute('action') || location.href, location.href); } catch (_) { return 'untrusted'; }
+    if (String(form.method).toLowerCase() !== 'post' || action.origin !== location.origin || action.pathname !== '/cas/login') return 'untrusted';
     const fields = ${JSON.stringify({ username, password })};
-    const user = document.getElementById('username'), pass = document.getElementById('password'), button = document.getElementById('dl');
-    if (!user || !pass || !button || typeof window.checkForm !== 'function') return 'not-ready';
-    user.value = fields.username; pass.value = fields.password;
-    user.dispatchEvent(new Event('input', {bubbles:true})); pass.dispatchEvent(new Event('input', {bubbles:true}));
     const captcha = document.getElementById('kaptcha');
     if (captcha && getComputedStyle(captcha).display !== 'none' && (!captcha.getClientRects || captcha.getClientRects().length > 0)) return 'verification';
+    // Remove only the previous attempt's message; it must not be mistaken for the new result.
+    const oldError = document.getElementById('errormsg'); if (oldError) oldError.textContent = '';
+    user.value = fields.username; pass.value = fields.password;
+    user.dispatchEvent(new Event('input', {bubbles:true})); pass.dispatchEvent(new Event('input', {bubbles:true}));
     button.click(); return 'submitted';
   })()`;
 }
